@@ -3,7 +3,10 @@
 
 /node_modules
 
+/target
+
 .env
 *.orig
 *.pyc
 *.swp
+.DS_Store
