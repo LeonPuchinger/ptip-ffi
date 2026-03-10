@@ -22,13 +22,13 @@ pub struct LexerRule {
 
 pub struct LexerDirective {
     pub rule: LexerRule,
-    pub skip: bool,
+    pub keep: bool,
 }
 
 struct CompiledLexerDirective {
     pattern: Regex,
     kind: &'static str,
-    skip: bool,
+    keep: bool,
 }
 
 /// A snapshot of the lexer's state, which can be used to restore the lexer to a previous position.
@@ -73,11 +73,11 @@ impl<'a> LazyLexer<'a> {
     pub fn new(input: &'a str, rules: Vec<LexerDirective>) -> Self {
         let compiled_rules = rules
             .iter()
-            .map(|LexerDirective { rule, skip }| CompiledLexerDirective {
+            .map(|LexerDirective { rule, keep }| CompiledLexerDirective {
                 // TODO: translate to a `LexerError`
                 pattern: Regex::new(rule.pattern).expect("invalid lexer regex"),
                 kind: rule.kind,
-                skip: *skip,
+                keep: *keep,
             })
             .collect::<Vec<_>>();
         Self {
@@ -114,11 +114,11 @@ impl<'a> Lexer<'a> for LazyLexer<'a> {
             let remaining = &self.input[self.input_cursor..];
             let mut best_length: usize = 0;
             let mut best_kind: Option<&'a str> = None;
-            let mut best_skip: bool = false;
+            let mut best_keep: bool = true;
             for CompiledLexerDirective {
                 pattern,
                 kind,
-                skip,
+                keep,
             } in self.rules.iter()
             {
                 // TODO: improve performance by:
@@ -130,7 +130,7 @@ impl<'a> Lexer<'a> for LazyLexer<'a> {
                     if matched_length > best_length {
                         best_length = matched_length;
                         best_kind = Some(kind);
-                        best_skip = *skip;
+                        best_keep = *keep;
                     }
                 }
             }
@@ -155,7 +155,7 @@ impl<'a> Lexer<'a> for LazyLexer<'a> {
             self.input_cursor += best_length;
             self.input_row = row_end;
             self.input_column = column_end;
-            if best_skip {
+            if !best_keep {
                 // If the token should be skipped, return the next token instead
                 return self.next();
             }
