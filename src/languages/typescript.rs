@@ -4,7 +4,7 @@ use crate::{
     parser::{
         ParserError,
         atoms::{exact, token_kind},
-        lexer::{self, LazyLexer},
+        lexer::{self, LazyLexer, LexerDirective, LexerRule},
     },
 };
 
@@ -33,7 +33,11 @@ fn function_definitions(lexer: &mut dyn lexer::Lexer) -> Result<Vec<LanguageFeat
 pub fn register() -> LanguageConfig<'static> {
     LanguageConfig {
         name: "TypeScript",
-        build_lexer: Box::new(|input| Box::new(LazyLexer::new(input, vec![]))),
+        build_lexer: Box::new(|input| Box::new(LazyLexer::new(input, vec![
+            LexerDirective { rule: LexerRule { kind: "whitespace", pattern: r"\s+" }, keep: false },
+            LexerDirective { rule: LexerRule { kind: "keyword", pattern: r"\bfunction\b" }, keep: true },
+            LexerDirective { rule: LexerRule { kind: "identifier", pattern: "[a-zA-Z_$][a-zA-Z0-9_$]*" }, keep: true },
+        ]))),
         parser: Box::new(function_definitions),
     }
 }
