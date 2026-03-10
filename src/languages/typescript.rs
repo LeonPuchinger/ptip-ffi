@@ -1,5 +1,6 @@
 use crate::{
-    config::{FeatureParser, LanguageConfig, LanguageFeature},
+    config::LanguageConfig,
+    features::LanguageFeature,
     parser::{
         ParserError,
         atoms::{exact, token_kind},
@@ -7,45 +8,32 @@ use crate::{
     },
 };
 
-fn keyworded_function_definition(lexer: &mut dyn lexer::Lexer) -> Result<(), ParserError> {
+fn keyworded_function_definition(
+    lexer: &mut dyn lexer::Lexer,
+) -> Result<LanguageFeature, ParserError> {
     let _keyword = exact("function")(lexer)?;
-    let _name = token_kind("identifier")(lexer)?;
+    let name = token_kind("identifier")(lexer)?;
     let _open_parenthesis = exact("(")(lexer)?;
     let _close_parenthesis = exact(")")(lexer)?;
-    Ok(())
+    Ok(LanguageFeature::Function {
+        name,
+        args: Vec::new(),
+        return_type: String::new(),
+    })
 }
 
-pub fn register<'a>() -> LanguageConfig<'a> {
-    // Dummy config for TS, just for demonstration purposes of the overall architecture.
+fn function_definitions(lexer: &mut dyn lexer::Lexer) -> Result<Vec<LanguageFeature>, ParserError> {
+    let mut features = Vec::new();
+    while let Ok(feature) = keyworded_function_definition(lexer) {
+        features.push(feature);
+    }
+    Ok(features)
+}
+
+pub fn register() -> LanguageConfig<'static> {
     LanguageConfig {
         name: "TypeScript",
-        features: vec![
-            FeatureParser {
-                kind: LanguageFeature::Function,
-                lexer: LazyLexer::new(
-                    "", // TODO: Pass a lexer factory here that passes the input to the lexer later
-                    vec![
-                        // Define lexer rules for TypeScript function syntax
-                    ],
-                ),
-                parser: Box::new(|lexer| {
-                    // Implement a parser for TypeScript function declarations
-                    Ok(String::from("Parsed TypeScript function"))
-                }),
-            },
-            FeatureParser {
-                kind: LanguageFeature::Type,
-                lexer: LazyLexer::new(
-                    "",
-                    vec![
-                        // Define lexer rules for TypeScript type syntax
-                    ],
-                ),
-                parser: Box::new(|lexer| {
-                    // Implement a parser for TypeScript type declarations
-                    Ok(String::from("Parsed TypeScript type"))
-                }),
-            },
-        ],
+        build_lexer: Box::new(|input| Box::new(LazyLexer::new(input, vec![]))),
+        parser: Box::new(function_definitions),
     }
 }

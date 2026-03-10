@@ -1,20 +1,10 @@
-use crate::parser::{
-    Parser,
-    lexer::{LazyLexer, Lexer},
+use crate::{
+    features::LanguageFeature,
+    parser::{Parser, lexer::Lexer},
 };
-
-pub enum LanguageFeature {
-    Function,
-    Type,
-}
-
-pub struct FeatureParser<'a, L: Lexer<'a>> {
-    pub(crate) kind: LanguageFeature,
-    pub(crate) lexer: L,
-    pub(crate) parser: Parser<'a, String>,
-}
 
 pub struct LanguageConfig<'a> {
     pub name: &'a str,
-    pub features: Vec<FeatureParser<'a, LazyLexer<'a>>>,
+    pub build_lexer: Box<dyn Fn(&'a str) -> Box<dyn Lexer<'a>> + Send + Sync + 'a>,
+    pub parser: Parser<'a, Vec<LanguageFeature>>,
 }
