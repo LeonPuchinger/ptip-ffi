@@ -1,5 +1,3 @@
-use crate::parser::{ParserError, atoms::token_kind, lexer::Lexer};
-
 mod config;
 mod features;
 mod languages;
