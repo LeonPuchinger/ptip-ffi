@@ -1,10 +1,10 @@
 use crate::{
     features::LanguageFeature,
-    parser::{Parser, lexer::Lexer},
+    parser::{ParserError, lexer::Lexer},
 };
 
-pub struct LanguageConfig<'a> {
-    pub name: &'a str,
-    pub build_lexer: Box<dyn Fn(&'a str) -> Box<dyn Lexer<'a>> + Send + Sync + 'a>,
-    pub parser: Parser<'a, Vec<LanguageFeature>>,
+pub struct LanguageConfig {
+    pub name: &'static str,
+    pub build_lexer: for<'a> fn(&'a str) -> Box<dyn Lexer<'a> + 'a>,
+    pub parser: for<'a> fn(&mut dyn Lexer<'a>) -> Result<Vec<LanguageFeature>, ParserError>,
 }

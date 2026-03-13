@@ -30,14 +30,14 @@ fn function_definitions(lexer: &mut dyn lexer::Lexer) -> Result<Vec<LanguageFeat
     Ok(features)
 }
 
-pub fn register() -> LanguageConfig<'static> {
+pub fn register() -> LanguageConfig {
     LanguageConfig {
         name: "TypeScript",
-        build_lexer: Box::new(|input| Box::new(LazyLexer::new(input, vec![
+        build_lexer: |input| Box::new(LazyLexer::new(input, vec![
             LexerDirective { rule: LexerRule { kind: "whitespace", pattern: r"\s+" }, keep: false },
             LexerDirective { rule: LexerRule { kind: "keyword", pattern: r"\bfunction\b" }, keep: true },
             LexerDirective { rule: LexerRule { kind: "identifier", pattern: "[a-zA-Z_$][a-zA-Z0-9_$]*" }, keep: true },
-        ]))),
-        parser: Box::new(function_definitions),
+        ])),
+        parser: function_definitions,
     }
 }
