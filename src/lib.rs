@@ -4,6 +4,7 @@ mod config;
 mod features;
 mod languages;
 mod parser;
+mod util;
 
 pub fn initialize() -> Vec<LanguageConfig> {
     languages::register_languages()
