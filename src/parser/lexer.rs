@@ -15,20 +15,32 @@ pub struct Token<'a> {
     pub position: TokenPosition,
 }
 
+#[derive(Clone, Copy)]
 pub struct LexerRule {
     pub pattern: &'static str,
     pub kind: &'static str,
 }
 
-pub struct LexerDirective {
-    pub rule: LexerRule,
-    pub keep: bool,
+#[derive(Clone, Copy)]
+pub enum StateModification<'a> {
+    None,
+    Pop,
+    Push(&'a [LexerDirective<'a>]),
+    PushLazy(&'a (dyn Fn() -> &'a [LexerDirective<'a>] + Send + Sync)),
 }
 
-struct CompiledLexerDirective {
+#[derive(Clone, Copy)]
+pub struct LexerDirective<'a> {
+    pub rule: LexerRule,
+    pub keep: bool,
+    pub modification: StateModification<'a>,
+}
+
+struct CompiledLexerDirective<'a> {
     pattern: Regex,
     kind: &'static str,
     keep: bool,
+    modification: StateModification<'a>,
 }
 
 /// A snapshot of the lexer's state, which can be used to restore the lexer to a previous position.
@@ -59,25 +71,26 @@ pub trait Lexer<'a> {
 /// The lexer maintains an internal buffer of tokens that have been matched so far, so that if the lexer is
 /// reset to a previous position, the tokens can be returned from the buffer without having to re-match
 /// the input.
-pub struct LazyLexer<'a> {
-    input: &'a str,
-    rules: Vec<CompiledLexerDirective>,
-    token_buffer: Vec<Token<'a>>,
+pub struct LazyLexer<'input, 'rules> {
+    input: &'input str,
+    rules: Vec<CompiledLexerDirective<'rules>>,
+    token_buffer: Vec<Token<'input>>,
     token_buffer_index: usize,
     input_cursor: usize,
     input_row: usize,
     input_column: usize,
 }
 
-impl<'a> LazyLexer<'a> {
-    pub fn new(input: &'a str, rules: Vec<LexerDirective>) -> Self {
+impl<'input, 'rules> LazyLexer<'input, 'rules> {
+    pub fn new(input: &'input str, rules: Vec<LexerDirective<'rules>>) -> Self {
         let compiled_rules = rules
-            .iter()
-            .map(|LexerDirective { rule, keep }| CompiledLexerDirective {
+            .into_iter()
+            .map(|LexerDirective { rule, keep, modification }| CompiledLexerDirective {
                 // TODO: translate to a `LexerError`
                 pattern: Regex::new(rule.pattern).expect("invalid lexer regex"),
                 kind: rule.kind,
-                keep: *keep,
+                keep,
+                modification,
             })
             .collect::<Vec<_>>();
         Self {
@@ -92,12 +105,12 @@ impl<'a> LazyLexer<'a> {
     }
 }
 
-impl<'a> Lexer<'a> for LazyLexer<'a> {
+impl<'input, 'rules> Lexer<'input> for LazyLexer<'input, 'rules> {
     /// Returns the next token from the input. If there are no more tokens, `LexerError::Eof` is returned.
     /// If the next token cannot be matched by any of the rules, `LexerError::NoMatch` is returned.
     /// For each token, the longest match is chosen. If there are multiple matches
     /// of the same length, the one defined first in the rules is chosen.
-    fn next(&mut self) -> Result<Token<'a>, LexerError> {
+    fn next(&mut self) -> Result<Token<'input>, LexerError> {
         if self.token_buffer_index < self.token_buffer.len() {
             // Return the next token from the buffer if available
             let token = &self.token_buffer[self.token_buffer_index];
@@ -113,12 +126,13 @@ impl<'a> Lexer<'a> for LazyLexer<'a> {
             // defined first wins. If there are no matches, an error is returned.
             let remaining = &self.input[self.input_cursor..];
             let mut best_length: usize = 0;
-            let mut best_kind: Option<&'a str> = None;
+            let mut best_kind: Option<&str> = None;
             let mut best_keep: bool = true;
             for CompiledLexerDirective {
                 pattern,
                 kind,
                 keep,
+                modification,
             } in self.rules.iter()
             {
                 // TODO: improve performance by:
