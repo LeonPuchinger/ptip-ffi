@@ -34,7 +34,7 @@ pub struct LexerRule<'a> {
 }
 
 #[derive(Clone)]
-pub enum CompiledStateModification<'a> {
+enum CompiledStateModification<'a> {
     None,
     Pop,
     Push(Vec<CompiledLexerRule<'a>>),
