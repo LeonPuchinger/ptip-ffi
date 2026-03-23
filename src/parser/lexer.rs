@@ -16,31 +16,19 @@ pub struct Token<'a> {
 }
 
 #[derive(Clone, Copy)]
-pub struct LexerRule {
-    pub pattern: &'static str,
-    pub kind: &'static str,
-}
-
-#[derive(Clone, Copy)]
 pub enum StateModification<'a> {
     None,
     Pop,
-    Push(&'a [LexerDirective<'a>]),
-    PushLazy(&'a (dyn Fn() -> &'a [LexerDirective<'a>] + Send + Sync)),
+    Push(&'a [LexerRule<'a>]),
+    PushLazy(&'a (dyn Fn() -> &'a [LexerRule<'a>] + Send + Sync)),
 }
 
-#[derive(Clone, Copy)]
-pub struct LexerDirective<'a> {
-    pub rule: LexerRule,
+#[derive(Clone)]
+pub struct LexerRule<'a> {
+    pub pattern: Regex,
+    pub kind: &'static str,
     pub keep: bool,
     pub modification: StateModification<'a>,
-}
-
-struct CompiledLexerDirective<'a> {
-    pattern: Regex,
-    kind: &'static str,
-    keep: bool,
-    modification: StateModification<'a>,
 }
 
 /// A snapshot of the lexer's state, which can be used to restore the lexer to a previous position.
@@ -56,6 +44,7 @@ pub enum LexerError {
     NoMatch,
     Eof,
     InvalidSnapshot { message: String },
+    InvalidState { message: String },
 }
 
 // A pull-based lexer that allows its caller to save and restore its state relative to the input sequence.
@@ -65,15 +54,17 @@ pub trait Lexer<'a> {
     fn restore(&mut self, state: LexerState) -> Option<LexerError>;
 }
 
+type LexerRuleset<'a> = Vec<LexerRule<'a>>;
+
 /// A lexer that takes an input string and a set of rules and produces a stream of tokens.
 /// The lexer is pull-based and lazy, meaning that it only produces tokens when requested
 /// and only processes the minimum amount of input necessary to produce the next token.
 /// The lexer maintains an internal buffer of tokens that have been matched so far, so that if the lexer is
 /// reset to a previous position, the tokens can be returned from the buffer without having to re-match
 /// the input.
-pub struct LazyLexer<'input, 'rules> {
+pub struct LazyStatefulLexer<'input, 'rules> {
     input: &'input str,
-    rules: Vec<CompiledLexerDirective<'rules>>,
+    state: Vec<LexerRuleset<'rules>>,
     token_buffer: Vec<Token<'input>>,
     token_buffer_index: usize,
     input_cursor: usize,
@@ -81,21 +72,12 @@ pub struct LazyLexer<'input, 'rules> {
     input_column: usize,
 }
 
-impl<'input, 'rules> LazyLexer<'input, 'rules> {
-    pub fn new(input: &'input str, rules: Vec<LexerDirective<'rules>>) -> Self {
-        let compiled_rules = rules
-            .into_iter()
-            .map(|LexerDirective { rule, keep, modification }| CompiledLexerDirective {
-                // TODO: translate to a `LexerError`
-                pattern: Regex::new(rule.pattern).expect("invalid lexer regex"),
-                kind: rule.kind,
-                keep,
-                modification,
-            })
-            .collect::<Vec<_>>();
+impl<'input, 'rules> LazyStatefulLexer<'input, 'rules> {
+    pub fn new(input: &'input str, rules: Vec<LexerRule<'rules>>) -> Self {
+        let initial_state = vec![rules];
         Self {
             input,
-            rules: compiled_rules,
+            state: initial_state,
             token_buffer: Vec::new(),
             token_buffer_index: 0,
             input_cursor: 0,
@@ -105,7 +87,7 @@ impl<'input, 'rules> LazyLexer<'input, 'rules> {
     }
 }
 
-impl<'input, 'rules> Lexer<'input> for LazyLexer<'input, 'rules> {
+impl<'input, 'rules> Lexer<'input> for LazyStatefulLexer<'input, 'rules> {
     /// Returns the next token from the input. If there are no more tokens, `LexerError::Eof` is returned.
     /// If the next token cannot be matched by any of the rules, `LexerError::NoMatch` is returned.
     /// For each token, the longest match is chosen. If there are multiple matches
@@ -128,12 +110,23 @@ impl<'input, 'rules> Lexer<'input> for LazyLexer<'input, 'rules> {
             let mut best_length: usize = 0;
             let mut best_kind: Option<&str> = None;
             let mut best_keep: bool = true;
-            for CompiledLexerDirective {
+            let mut best_modification: StateModification = StateModification::None;
+            let current_ruleset = match self.state.last() {
+                Some(ruleset) => ruleset,
+                None => {
+                    return Err(LexerError::InvalidState {
+                        message: String::from(
+                            "The lexer is currently not equipped with any rulesets.",
+                        ),
+                    });
+                }
+            };
+            for LexerRule {
                 pattern,
                 kind,
                 keep,
                 modification,
-            } in self.rules.iter()
+            } in current_ruleset.iter()
             {
                 // TODO: improve performance by:
                 // - anchoring the regexes to the beginning of the string (if not already anchored)
@@ -145,6 +138,7 @@ impl<'input, 'rules> Lexer<'input> for LazyLexer<'input, 'rules> {
                         best_length = matched_length;
                         best_kind = Some(kind);
                         best_keep = *keep;
+                        best_modification = *modification;
                     }
                 }
             }
@@ -169,6 +163,26 @@ impl<'input, 'rules> Lexer<'input> for LazyLexer<'input, 'rules> {
             self.input_cursor += best_length;
             self.input_row = row_end;
             self.input_column = column_end;
+            match best_modification {
+                StateModification::None => {}
+                StateModification::Pop => {
+                    if self.state.len() <= 1 {
+                        return Err(LexerError::InvalidState {
+                            message: String::from(
+                                "The lexer state cannot be popped because it only contains one ruleset.",
+                            ),
+                        });
+                    }
+                    self.state.pop();
+                }
+                StateModification::Push(new_rules) => {
+                    self.state.push(new_rules.to_vec());
+                }
+                StateModification::PushLazy(factory) => {
+                    let new_rules = factory();
+                    self.state.push(new_rules.to_vec());
+                }
+            }
             if !best_keep {
                 // If the token should be skipped, return the next token instead
                 return self.next();

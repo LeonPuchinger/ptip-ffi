@@ -20,6 +20,7 @@ impl From<LexerError> for ParserError {
             )),
             LexerError::Eof => ParserError::UnexpectedEof,
             LexerError::InvalidSnapshot { message } => ParserError::InternalError(message),
+            LexerError::InvalidState { message } => ParserError::InternalError(message),
         }
     }
 }
