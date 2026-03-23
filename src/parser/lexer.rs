@@ -1,5 +1,3 @@
-use std::sync::Arc;
-
 use regex::Regex;
 
 #[derive(Clone, Debug)]
@@ -34,14 +32,13 @@ pub struct LexerRule<'a> {
 }
 
 #[derive(Clone)]
-enum CompiledStateModification<'a> {
+enum CompiledStateModification {
     None,
     Pop,
-    Push(Vec<CompiledLexerRule<'a>>),
-    PushLazy(Arc<dyn Fn() -> Vec<CompiledLexerRule<'a>> + Send + Sync + 'a>),
+    Push(Vec<CompiledLexerRule>),
 }
 
-impl<'a> From<StateModification<'a>> for CompiledStateModification<'a> {
+impl<'a> From<StateModification<'a>> for CompiledStateModification {
     fn from(modification: StateModification<'a>) -> Self {
         match modification {
             StateModification::None => CompiledStateModification::None,
@@ -51,27 +48,23 @@ impl<'a> From<StateModification<'a>> for CompiledStateModification<'a> {
                 CompiledStateModification::Push(compiled_rules)
             }
             StateModification::PushLazy(factory) => {
-                let compiled_factory: Arc<
-                    dyn Fn() -> Vec<CompiledLexerRule<'a>> + Send + Sync + 'a,
-                > = Arc::new(move || {
-                    let rules = factory();
-                    rules.iter().cloned().map(CompiledLexerRule::from).collect()
-                });
-                CompiledStateModification::PushLazy(compiled_factory)
+                let rules = factory();
+                let compiled_rules = rules.iter().cloned().map(CompiledLexerRule::from).collect();
+                CompiledStateModification::Push(compiled_rules)
             }
         }
     }
 }
 
 #[derive(Clone)]
-struct CompiledLexerRule<'a> {
+struct CompiledLexerRule {
     pattern: Regex,
     kind: &'static str,
     keep: bool,
-    modification: CompiledStateModification<'a>,
+    modification: CompiledStateModification,
 }
 
-impl<'a> From<LexerRule<'a>> for CompiledLexerRule<'a> {
+impl<'a> From<LexerRule<'a>> for CompiledLexerRule {
     fn from(rule: LexerRule<'a>) -> Self {
         Self {
             pattern: Regex::new(rule.pattern).unwrap(),
@@ -105,7 +98,7 @@ pub trait Lexer<'a> {
     fn restore(&mut self, state: LexerState) -> Option<LexerError>;
 }
 
-type LexerRuleset<'a> = Vec<CompiledLexerRule<'a>>;
+type LexerRuleset = Vec<CompiledLexerRule>;
 
 /// A lexer that takes an input string and a set of rules and produces a stream of tokens.
 /// The lexer is pull-based and lazy, meaning that it only produces tokens when requested
@@ -113,9 +106,9 @@ type LexerRuleset<'a> = Vec<CompiledLexerRule<'a>>;
 /// The lexer maintains an internal buffer of tokens that have been matched so far, so that if the lexer is
 /// reset to a previous position, the tokens can be returned from the buffer without having to re-match
 /// the input.
-pub struct LazyStatefulLexer<'input, 'rules> {
+pub struct LazyStatefulLexer<'input> {
     input: &'input str,
-    state: Vec<LexerRuleset<'rules>>,
+    state: Vec<LexerRuleset>,
     token_buffer: Vec<Token<'input>>,
     token_buffer_index: usize,
     input_cursor: usize,
@@ -123,8 +116,8 @@ pub struct LazyStatefulLexer<'input, 'rules> {
     input_column: usize,
 }
 
-impl<'input, 'rules> LazyStatefulLexer<'input, 'rules> {
-    pub fn new(input: &'input str, rules: Vec<LexerRule<'rules>>) -> Self {
+impl<'input> LazyStatefulLexer<'input> {
+    pub fn new(input: &'input str, rules: Vec<LexerRule>) -> Self {
         let compiled_rules = rules.into_iter().map(CompiledLexerRule::from).collect();
         let initial_state = vec![compiled_rules];
         Self {
@@ -139,7 +132,7 @@ impl<'input, 'rules> LazyStatefulLexer<'input, 'rules> {
     }
 }
 
-impl<'input, 'rules> Lexer<'input> for LazyStatefulLexer<'input, 'rules> {
+impl<'input> Lexer<'input> for LazyStatefulLexer<'input> {
     /// Returns the next token from the input. If there are no more tokens, `LexerError::Eof` is returned.
     /// If the next token cannot be matched by any of the rules, `LexerError::NoMatch` is returned.
     /// For each token, the longest match is chosen. If there are multiple matches
@@ -230,10 +223,6 @@ impl<'input, 'rules> Lexer<'input> for LazyStatefulLexer<'input, 'rules> {
                 }
                 CompiledStateModification::Push(new_rules) => {
                     self.state.push(new_rules.clone());
-                }
-                CompiledStateModification::PushLazy(factory) => {
-                    let new_rules = factory();
-                    self.state.push(new_rules);
                 }
             }
             if !best_keep {
