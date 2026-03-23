@@ -6,7 +6,7 @@ use crate::{
     parser::{
         ParserError,
         atoms::{exact, token_kind},
-        lexer::{self, LazyLexer, LexerDirective, LexerRule, StateModification},
+        lexer::{self, LazyStatefulLexer, LexerRule, StateModification},
     },
 };
 
@@ -32,23 +32,23 @@ fn function_definitions(lexer: &mut dyn lexer::Lexer) -> Result<Vec<LanguageFeat
     Ok(features)
 }
 
-static SOME_LEXER_RULES: &[LexerDirective] = &[
-    LexerDirective { rule: LexerRule { kind: "string_literal", pattern: r#""([^"\\]|\\.)*""# }, keep: true, modification: StateModification::PushLazy(&|| STRING_LITERALS) },
-    LexerDirective { rule: LexerRule { kind: "string_literal", pattern: r#"'([^'\\]|\\.)*'"# }, keep: true, modification: StateModification::None },
+static SOME_LEXER_RULES: &[LexerRule] = &[
+    LexerRule { kind: "string_literal", pattern: r#""([^"\\]|\\.)*""#, keep: true, modification: StateModification::PushLazy(&|| STRING_LITERALS) },
+    LexerRule { kind: "string_literal", pattern: r#"'([^'\\]|\\.)*'"#, keep: true, modification: StateModification::None },
 ];
 
-static STRING_LITERALS: &[LexerDirective] = &[
-    LexerDirective { rule: LexerRule { kind: "string_literal", pattern: r#""([^"\\]|\\.)*""# }, keep: true, modification: StateModification::Push(SOME_LEXER_RULES) },
-    LexerDirective { rule: LexerRule { kind: "string_literal", pattern: r#"'([^'\\]|\\.)*'"# }, keep: true, modification: StateModification::None },
+static STRING_LITERALS: &[LexerRule] = &[
+    LexerRule { kind: "string_literal", pattern: r#""([^"\\]|\\.)*""#, keep: true, modification: StateModification::Push(SOME_LEXER_RULES) },
+    LexerRule { kind: "string_literal", pattern: r#"'([^'\\]|\\.)*'"#, keep: true, modification: StateModification::None },
 ];
 
 pub fn register() -> LanguageConfig {
     LanguageConfig {
         name: "TypeScript",
-        build_lexer: |input| Box::new(LazyLexer::new(input, vec![
-            LexerDirective { rule: LexerRule { kind: "whitespace", pattern: r"\s+" }, keep: false, modification: StateModification::None },
-            LexerDirective { rule: LexerRule { kind: "keyword", pattern: r"\bfunction\b" }, keep: true, modification: StateModification::None },
-            LexerDirective { rule: LexerRule { kind: "identifier", pattern: "[a-zA-Z_$][a-zA-Z0-9_$]*" }, keep: true, modification: StateModification::Push(STRING_LITERALS) },
+        build_lexer: |input| Box::new(LazyStatefulLexer::new(input, vec![
+            LexerRule { kind: "whitespace", pattern: r"\s+", keep: false, modification: StateModification::None },
+            LexerRule { kind: "keyword", pattern: r"\bfunction\b", keep: true, modification: StateModification::None },
+            LexerRule { kind: "identifier", pattern: "[a-zA-Z_$][a-zA-Z0-9_$]*", keep: true, modification: StateModification::Push(STRING_LITERALS) },
         ])),
         parser: function_definitions,
     }
