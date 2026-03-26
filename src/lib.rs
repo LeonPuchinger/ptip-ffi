@@ -1,6 +1,7 @@
-use crate::config::LanguageConfig;
+use crate::{config::LanguageConfig, error::PTIPFFIError};
 
 mod config;
+mod error;
 mod features;
 mod languages;
 mod parser;
@@ -15,23 +16,16 @@ pub fn generate(
     input_language: &str,
     output_language: &str,
     registry: &[LanguageConfig],
-) -> Result<(), String> {
+) -> Result<(), PTIPFFIError> {
     let input_config = registry
         .iter()
         .find(|config| config.name == input_language)
-        .ok_or(format!(
-            "Input language '{}' not found in registry",
-            input_language
-        ))?;
-    let output_config = registry
+        .ok_or(PTIPFFIError::LanguageNotFound(input_language.into()))?;
+    let _output_config = registry
         .iter()
         .find(|config| config.name == output_language)
-        .ok_or(format!(
-            "Output language '{}' not found in registry",
-            output_language
-        ))?;
-    let mut lexer = (input_config.build_lexer)(input);
-    let _features =
-        (input_config.parser)(&mut *lexer).map_err(|e| format!("Error parsing input: {:?}", e))?;
+        .ok_or(PTIPFFIError::LanguageNotFound(output_language.into()))?;
+    let mut lexer = (input_config.build_lexer)(input)?;
+    let _features = (input_config.parser)(&mut *lexer)?;
     Ok(())
 }

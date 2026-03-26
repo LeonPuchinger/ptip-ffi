@@ -19,8 +19,11 @@ impl From<LexerError> for ParserError {
                 "Input could not be tokenized by any of the lexer rules.",
             )),
             LexerError::Eof => ParserError::UnexpectedEof,
+            // TODO: rethink error mapping
             LexerError::InvalidSnapshot { message } => ParserError::InternalError(message),
             LexerError::InvalidState { message } => ParserError::InternalError(message),
+            LexerError::InvalidRule { message } => ParserError::InternalError(message),
+            LexerError::Custom { message } => ParserError::Custom(message),
         }
     }
 }
