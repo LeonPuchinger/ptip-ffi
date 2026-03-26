@@ -1,4 +1,5 @@
 use regex::Regex;
+use std::{collections::HashMap, vec};
 
 #[derive(Clone, Debug)]
 pub struct TokenPosition {
@@ -15,14 +16,28 @@ pub struct Token<'a> {
     pub position: TokenPosition,
 }
 
+/// A state modification controls what happens to the lexer's internal stack of
+/// rulesets when a rule is matched. This grants the lexer context-free
+/// capabilities, which is necessary for tokenizing complex languages.
 #[derive(Clone, Copy)]
 pub enum StateModification<'a> {
+    /// The lexer's stack remains unchanged.
     None,
+    /// The top ruleset is popped from the lexer's stack. If the stack only
+    /// contains one ruleset, this results in a `LexerError::InvalidState`.
     Pop,
+    /// Pushes a new ruleset onto the lexer's stack.
     Push(&'a [LexerRule<'a>]),
+    /// Similar to `Push`, but the ruleset is not provided directly. Instead, a
+    /// factory function is provided that returns the ruleset when called. This
+    /// allows for defining cyclic rulesets, which is not possible with the
+    /// standard `Push` variant.
     PushLazy(&'a (dyn Fn() -> &'a [LexerRule<'a>] + Send + Sync)),
 }
 
+/// A lexer rule defines which tokens are generated from the input. They also
+/// control the state of the lexer by allowing rulesets (states) to be pushed
+/// and popped from the lexer's internal stack.
 #[derive(Clone)]
 pub struct LexerRule<'a> {
     pub pattern: &'static str,
@@ -31,31 +46,25 @@ pub struct LexerRule<'a> {
     pub modification: StateModification<'a>,
 }
 
+/// After a ruleset of the lexer is compiled, it is stored in a shared arena.
+/// The `RulesetIndex` is a numeric index that is used to refer to the compiled
+/// ruleset in the arena.
+type RulesetIndex = usize;
+
+/// The compiled version of the state modification does not include a `PushLazy`
+/// variant because cyclic references, which are implemented using `PushLazy`,
+/// are resolved during compilation.
 #[derive(Clone)]
 enum CompiledStateModification {
     None,
     Pop,
-    Push(Vec<CompiledLexerRule>),
+    Push { index: RulesetIndex },
 }
 
-impl<'a> From<StateModification<'a>> for CompiledStateModification {
-    fn from(modification: StateModification<'a>) -> Self {
-        match modification {
-            StateModification::None => CompiledStateModification::None,
-            StateModification::Pop => CompiledStateModification::Pop,
-            StateModification::Push(rules) => {
-                let compiled_rules = rules.iter().cloned().map(CompiledLexerRule::from).collect();
-                CompiledStateModification::Push(compiled_rules)
-            }
-            StateModification::PushLazy(factory) => {
-                let rules = factory();
-                let compiled_rules = rules.iter().cloned().map(CompiledLexerRule::from).collect();
-                CompiledStateModification::Push(compiled_rules)
-            }
-        }
-    }
-}
-
+/// The lexer compiles regular `LexerRule`s into `CompiledLexerRule`s, which
+/// contain compiled regex patterns, for instance. The regular `LexerRule`s can
+/// be defined statically, while the compiled variants cannot. The compiled
+/// variants are stored in the lexer during runtime and used for tokenization.
 #[derive(Clone)]
 struct CompiledLexerRule {
     pattern: Regex,
@@ -64,19 +73,43 @@ struct CompiledLexerRule {
     modification: CompiledStateModification,
 }
 
-impl<'a> From<LexerRule<'a>> for CompiledLexerRule {
-    fn from(rule: LexerRule<'a>) -> Self {
-        Self {
-            pattern: Regex::new(rule.pattern).unwrap(),
-            kind: rule.kind,
-            keep: rule.keep,
-            modification: rule.modification.into(),
+pub enum LexerError {
+    NoMatch,
+    Eof,
+    InvalidSnapshot { message: String },
+    InvalidState { message: String },
+    InvalidRule { message: String },
+    Custom { message: String },
+}
+
+impl From<regex::Error> for LexerError {
+    fn from(e: regex::Error) -> Self {
+        match e {
+            regex::Error::Syntax(message) => LexerError::InvalidRule {
+                message: format!(
+                    "A syntax error was encountered in a rule pattern: '{}'.",
+                    message
+                ),
+            },
+            regex::Error::CompiledTooBig(size) => LexerError::InvalidRule {
+                message: format!(
+                    "A rule pattern is too large to be compiled by the regex engine (size: {}).",
+                    size
+                ),
+            },
+            _ => LexerError::Custom {
+                message: format!(
+                    "An unknown error occurred while compiling the regex: '{:?}'",
+                    e
+                ),
+            },
         }
     }
 }
 
-/// A snapshot of the lexer's state, which can be used to restore the lexer to a previous position.
-/// The snapshot can be created using `Lexer::snapshot` and restored using `Lexer::restore`.
+/// A snapshot of the lexer's state, which can be used to restore the lexer to a
+/// previous position. The snapshot can be created using `Lexer::snapshot` and
+/// restored using `Lexer::restore`.
 pub struct LexerState {
     token_buffer_index: usize,
     input_cursor: usize,
@@ -84,31 +117,109 @@ pub struct LexerState {
     input_column: usize,
 }
 
-pub enum LexerError {
-    NoMatch,
-    Eof,
-    InvalidSnapshot { message: String },
-    InvalidState { message: String },
-}
-
-// A pull-based lexer that allows its caller to save and restore its state relative to the input sequence.
+// A pull-based lexer that allows its caller to save and restore its state
+// relative to the input sequence.
 pub trait Lexer<'a> {
     fn next(&mut self) -> Result<Token<'a>, LexerError>;
     fn snapshot(&self) -> LexerState;
     fn restore(&mut self, state: LexerState) -> Option<LexerError>;
 }
 
+/// A collection of compiled lexer rules. To match a token, the lexer only
+/// ever looks at a single ruleset, which is the topmost one on the internal stack.
 type LexerRuleset = Vec<CompiledLexerRule>;
 
-/// A lexer that takes an input string and a set of rules and produces a stream of tokens.
-/// The lexer is pull-based and lazy, meaning that it only produces tokens when requested
-/// and only processes the minimum amount of input necessary to produce the next token.
-/// The lexer maintains an internal buffer of tokens that have been matched so far, so that if the lexer is
-/// reset to a previous position, the tokens can be returned from the buffer without having to re-match
-/// the input.
+/// A key that uniquely identifies a ruleset based on the pointer and length of
+/// the rules slice. This is used to keep track of already compiled rulesets and
+/// their indices, so that recursive and cyclic rulesets are compiled without
+/// getting into infinite loops.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+struct RulesetKey {
+    ptr: *const (),
+    len: usize,
+}
+
+impl RulesetKey {
+    fn from_rules(rules: &[LexerRule]) -> Self {
+        RulesetKey {
+            ptr: rules.as_ptr() as *const (),
+            len: rules.len(),
+        }
+    }
+}
+
+/// Used to keep track of already compiled rulesets and their indices, so that
+/// recursive and cyclic rulesets are compiled without getting into infinite loops.
+struct CompileContext {
+    rulesets: Vec<LexerRuleset>,
+    indices: HashMap<RulesetKey, usize>,
+}
+
+/// Compiles a ruleset and all of its nested rulesets into `CompiledLexerRule`s
+/// and stores them in the `CompileContext`. If the same ruleset is encountered
+/// repeatedly, the previously assigned index is returned, which
+/// allows for recursive and cyclic rulesets to be compiled creating an infinite
+/// recursion.
+fn compile_ruleset<'s, 'a>(
+    rules: &'s [LexerRule<'a>],
+    context: &mut CompileContext,
+) -> Result<RulesetIndex, LexerError> {
+    let key = RulesetKey::from_rules(rules);
+    // Check whether the ruleset is currently or has
+    // already been compiled and return its index if so.
+    if let Some(&index) = context.indices.get(&key) {
+        return Ok(index);
+    }
+    let index = context.rulesets.len();
+    context.indices.insert(key, index);
+    // Insert a placeholder to allow self/cyclic references
+    context.rulesets.push(Vec::new());
+    let compiled_rules = rules
+        .iter()
+        .map(|rule| {
+            let pattern = Regex::new(rule.pattern)?;
+            let modification = match rule.modification {
+                StateModification::None => CompiledStateModification::None,
+                StateModification::Pop => CompiledStateModification::Pop,
+                StateModification::Push(nested) => {
+                    let target = compile_ruleset(nested, context)?;
+                    CompiledStateModification::Push { index: target }
+                }
+                StateModification::PushLazy(factory) => {
+                    let nested = factory();
+                    let target = compile_ruleset(nested, context)?;
+                    CompiledStateModification::Push { index: target }
+                }
+            };
+            Ok(CompiledLexerRule {
+                pattern,
+                kind: rule.kind,
+                keep: rule.keep,
+                modification,
+            })
+        })
+        .collect::<Result<LexerRuleset, LexerError>>()?;
+    context.rulesets[index] = compiled_rules;
+    Ok(index)
+}
+
+/// A lexer that takes an input string and a set of rules and produces a stream
+/// of tokens. The lexer is pull-based and lazy, meaning that it only produces
+/// tokens when requested and only processes the minimum amount of input
+/// necessary to produce the next token. The lexer maintains an internal buffer
+/// of tokens that have been matched so far, so that if the lexer is reset to a
+/// previous position, the tokens can be returned from the buffer without having
+/// to re-match the input.
+/// The lexer also maintains an internal stack of rulesets, which grants it
+/// context-free capabilities. When a rule is matched, it can specify a
+/// modification to the stack, which allows for rulesets to be pushed and popped
+/// from said stack. This is necessary for tokenizing complex languages, which often
+/// require different tokenization rules in different contexts
+/// (e.g. inside a string literal vs. outside of one).
 pub struct LazyStatefulLexer<'input> {
     input: &'input str,
-    state: Vec<LexerRuleset>,
+    rulesets: Vec<LexerRuleset>,
+    state: Vec<RulesetIndex>,
     token_buffer: Vec<Token<'input>>,
     token_buffer_index: usize,
     input_cursor: usize,
@@ -117,26 +228,32 @@ pub struct LazyStatefulLexer<'input> {
 }
 
 impl<'input> LazyStatefulLexer<'input> {
-    pub fn new(input: &'input str, rules: Vec<LexerRule>) -> Self {
-        let compiled_rules = rules.into_iter().map(CompiledLexerRule::from).collect();
-        let initial_state = vec![compiled_rules];
-        Self {
+    pub fn new(input: &'input str, rules: Vec<LexerRule>) -> Result<Self, LexerError> {
+        let mut context = CompileContext {
+            rulesets: Vec::new(),
+            indices: HashMap::new(),
+        };
+        let root_index = compile_ruleset(&rules[..], &mut context)?;
+        let state = vec![root_index];
+        Ok(Self {
             input,
-            state: initial_state,
+            rulesets: context.rulesets,
+            state,
             token_buffer: Vec::new(),
             token_buffer_index: 0,
             input_cursor: 0,
             input_row: 0,
             input_column: 0,
-        }
+        })
     }
 }
 
 impl<'input> Lexer<'input> for LazyStatefulLexer<'input> {
-    /// Returns the next token from the input. If there are no more tokens, `LexerError::Eof` is returned.
-    /// If the next token cannot be matched by any of the rules, `LexerError::NoMatch` is returned.
-    /// For each token, the longest match is chosen. If there are multiple matches
-    /// of the same length, the one defined first in the rules is chosen.
+    /// Returns the next token from the input. If there are no more tokens,
+    /// `LexerError::Eof` is returned. If the next token cannot be matched by
+    /// any of the rules, `LexerError::NoMatch` is returned. For each token, the
+    /// longest match is chosen. If there are multiple matches of the same
+    /// length, the one defined first in the rules is chosen.
     fn next(&mut self) -> Result<Token<'input>, LexerError> {
         if self.token_buffer_index < self.token_buffer.len() {
             // Return the next token from the buffer if available
@@ -157,12 +274,23 @@ impl<'input> Lexer<'input> for LazyStatefulLexer<'input> {
             let mut best_keep: bool = true;
             let mut best_modification: &CompiledStateModification =
                 &CompiledStateModification::None;
-            let current_ruleset = match self.state.last() {
-                Some(ruleset) => ruleset,
+            let current_ruleset_index = match self.state.last() {
+                Some(index) => *index,
                 None => {
                     return Err(LexerError::InvalidState {
                         message: String::from(
                             "The lexer is currently not equipped with any rulesets.",
+                        ),
+                    });
+                }
+            };
+            let current_ruleset = match self.rulesets.get(current_ruleset_index) {
+                Some(ruleset) => ruleset,
+                None => {
+                    return Err(LexerError::InvalidState {
+                        message: format!(
+                            "The lexer refers to an unknown ruleset index: {}",
+                            current_ruleset_index
                         ),
                     });
                 }
@@ -221,8 +349,10 @@ impl<'input> Lexer<'input> for LazyStatefulLexer<'input> {
                     }
                     self.state.pop();
                 }
-                CompiledStateModification::Push(new_rules) => {
-                    self.state.push(new_rules.clone());
+                CompiledStateModification::Push {
+                    index: target_index,
+                } => {
+                    self.state.push(*target_index);
                 }
             }
             if !best_keep {
@@ -248,7 +378,8 @@ impl<'input> Lexer<'input> for LazyStatefulLexer<'input> {
         }
     }
 
-    /// Creates a snapshot of the lexer's current state, which can be used to restore the lexer to this position later.
+    /// Creates a snapshot of the lexer's current state, which can be used to
+    /// restore the lexer to this position later.
     /// The snapshot can be restored by calling `Lexer::restore`.
     fn snapshot(&self) -> LexerState {
         LexerState {
