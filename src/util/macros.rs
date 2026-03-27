@@ -1,12 +1,13 @@
 /// Creates a [`HashMap`] from the given key–value pairs.
 ///
 /// `map!` allows `HashMap`s to be defined with a concise, literal-like syntax.
-/// There are two main forms of this macro:
+/// There are two main ways to use this macro:
 ///
 /// - Create a `HashMap` with type inference:
 ///
 /// ```
 /// use std::collections::HashMap;
+/// use ptip_ffi::map;
 ///
 /// let m = map! {
 ///     "a" => 1,
@@ -20,13 +21,12 @@
 ///
 /// ```
 /// use std::collections::HashMap;
+/// use ptip_ffi::map;
 ///
-/// let m = map! {
-///     String => i32,
+/// let m: HashMap<String, i32> = map! {
 ///     "a".to_string() => 1,
 ///     "b".to_string() => 3,
 /// };
-/// let m2 = map! { String => i32, }; // empty, typed map
 /// ```
 ///
 /// Trailing commas after the last entry are allowed. For empty maps without
@@ -40,21 +40,10 @@ macro_rules! map {
         ::std::collections::HashMap::new()
     };
 
-    // Typed, possibly empty: map! { K => V, }
-    ($K:ty => $V:ty $(,)?) => {{
-        ::std::collections::HashMap::<$K, $V>::new()
-    }};
-
-    // Untyped entries, type inferred from contents
+    // Untyped entries, type inferred from contents or
+    // the type annotation of the assignee.
     ( $( $key:expr => $value:expr ),+ $(,)? ) => {{
         let mut m = ::std::collections::HashMap::new();
-        $( m.insert($key, $value); )*
-        m
-    }};
-
-    // Typed entries: map! { K => V, "a" => 1, "b" => 3, }
-    ( $K:ty => $V:ty, $( $key:expr => $value:expr ),+ $(,)? ) => {{
-        let mut m = ::std::collections::HashMap::<$K, $V>::new();
         $( m.insert($key, $value); )*
         m
     }};
