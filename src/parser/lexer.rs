@@ -73,6 +73,7 @@ struct CompiledLexerRule {
     modification: CompiledStateModification,
 }
 
+#[derive(Debug)]
 pub enum LexerError {
     NoMatch,
     Eof,
@@ -406,5 +407,256 @@ impl<'input> Lexer<'input> for LazyStatefulLexer<'input> {
         self.input_row = state.input_row;
         self.input_column = state.input_column;
         None
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn lexes_identifiers_and_skips_whitespace() {
+        let rules = vec![
+            LexerRule {
+                pattern: r"[a-zA-Z_][a-zA-Z0-9_]*",
+                kind: "ident",
+                keep: true,
+                modification: StateModification::None,
+            },
+            LexerRule {
+                pattern: r"\s+",
+                kind: "whitespace",
+                keep: false,
+                modification: StateModification::None,
+            },
+        ];
+
+        let mut lexer = LazyStatefulLexer::new("foo bar", rules).expect("lexer should build");
+
+        let first = lexer.next().expect("first token");
+        assert_eq!(first.kind, "ident");
+        assert_eq!(first.text, "foo");
+
+        let second = lexer.next().expect("second token");
+        assert_eq!(second.kind, "ident");
+        assert_eq!(second.text, "bar");
+
+        match lexer.next() {
+            Err(LexerError::Eof) => {}
+            other => panic!("expected Eof, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn chooses_longest_match() {
+        let rules = vec![
+            LexerRule {
+                pattern: r"foobar",
+                kind: "foobar",
+                keep: true,
+                modification: StateModification::None,
+            },
+            LexerRule {
+                pattern: r"foo",
+                kind: "foo",
+                keep: true,
+                modification: StateModification::None,
+            },
+        ];
+
+        let mut lexer = LazyStatefulLexer::new("foobar", rules).expect("lexer should build");
+        let token = lexer.next().expect("token");
+        assert_eq!(token.kind, "foobar");
+        assert_eq!(token.text, "foobar");
+    }
+
+    #[test]
+    fn prefers_first_rule_on_tie() {
+        let rules = vec![
+            LexerRule {
+                pattern: r"a.",
+                kind: "first",
+                keep: true,
+                modification: StateModification::None,
+            },
+            LexerRule {
+                pattern: r"ab",
+                kind: "second",
+                keep: true,
+                modification: StateModification::None,
+            },
+        ];
+
+        let mut lexer = LazyStatefulLexer::new("ab", rules).expect("lexer should build");
+        let token = lexer.next().expect("token");
+        assert_eq!(token.kind, "first");
+        assert_eq!(token.text, "ab");
+    }
+
+    #[test]
+    fn snapshot_and_restore_rewinds_token_stream() {
+        let rules = vec![
+            LexerRule {
+                pattern: r"[a-z]+",
+                kind: "ident",
+                keep: true,
+                modification: StateModification::None,
+            },
+            LexerRule {
+                pattern: r"\s+",
+                kind: "whitespace",
+                keep: false,
+                modification: StateModification::None,
+            },
+        ];
+
+        let mut lexer = LazyStatefulLexer::new("one two", rules).expect("lexer should build");
+
+        let first = lexer.next().expect("first token");
+        assert_eq!(first.text, "one");
+
+        let snapshot = lexer.snapshot();
+
+        let second = lexer.next().expect("second token");
+        assert_eq!(second.text, "two");
+
+        // Restore and read again; we should see the same second token.
+        assert!(lexer.restore(snapshot).is_none());
+        let second_again = lexer.next().expect("second token after restore");
+        assert_eq!(second_again.kind, second.kind);
+        assert_eq!(second_again.text, second.text);
+        assert_eq!(second_again.position.row_begin, second.position.row_begin);
+        assert_eq!(
+            second_again.position.column_begin,
+            second.position.column_begin
+        );
+    }
+
+    #[test]
+    fn reports_no_match_error() {
+        let rules = vec![LexerRule {
+            pattern: r"[0-9]+",
+            kind: "number",
+            keep: true,
+            modification: StateModification::None,
+        }];
+
+        let mut lexer = LazyStatefulLexer::new("abc", rules).expect("lexer should build");
+
+        match lexer.next() {
+            Err(LexerError::NoMatch) => {}
+            other => panic!("expected NoMatch, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn computes_positions_across_newlines() {
+        let rules = vec![
+            LexerRule {
+                pattern: r"\s+",
+                kind: "whitespace",
+                keep: false,
+                modification: StateModification::None,
+            },
+            LexerRule {
+                pattern: r"[a-z]+",
+                kind: "ident",
+                keep: true,
+                modification: StateModification::None,
+            },
+        ];
+
+        let mut lexer = LazyStatefulLexer::new("\nabc", rules).expect("lexer should build");
+
+        // First token is whitespace with a newline, which is skipped.
+        let token = lexer.next().expect("identifier after newline");
+        assert_eq!(token.kind, "ident");
+        assert_eq!(token.text, "abc");
+        assert_eq!(token.position.row_begin, 1);
+        assert_eq!(token.position.column_begin, 0);
+        assert_eq!(token.position.row_end, 1);
+        assert_eq!(token.position.column_end, 3);
+    }
+
+    static INNER_RULES: &[LexerRule] = &[LexerRule {
+        pattern: r"[0-9]+",
+        kind: "inner_number",
+        keep: true,
+        modification: StateModification::Pop,
+    }];
+
+    static ROOT_RULES: &[LexerRule] = &[
+        LexerRule {
+            pattern: r"\[",
+            kind: "lbracket",
+            keep: false,
+            modification: StateModification::Push(INNER_RULES),
+        },
+        LexerRule {
+            pattern: r"[0-9]+",
+            kind: "root_number",
+            keep: true,
+            modification: StateModification::None,
+        },
+        LexerRule {
+            pattern: r"\s+",
+            kind: "whitespace",
+            keep: false,
+            modification: StateModification::None,
+        },
+    ];
+
+    #[test]
+    fn push_and_pop_state_changes_ruleset() {
+        let mut lexer =
+            LazyStatefulLexer::new("[123 456", ROOT_RULES.to_vec()).expect("lexer should build");
+
+        // '[' pushes INNER_RULES and is discarded.
+        let first = lexer.next().expect("inner number after bracket");
+        assert_eq!(first.kind, "inner_number");
+        assert_eq!(first.text, "123");
+
+        // After INNER_RULES token, state is popped back to ROOT_RULES.
+        let second = lexer.next().expect("root number");
+        assert_eq!(second.kind, "root_number");
+        assert_eq!(second.text, "456");
+    }
+
+    #[test]
+    fn pop_from_single_state_produces_error() {
+        let rules = vec![LexerRule {
+            pattern: r"[0-9]+",
+            kind: "number",
+            keep: true,
+            modification: StateModification::Pop,
+        }];
+
+        let mut lexer = LazyStatefulLexer::new("123", rules).expect("lexer should build");
+
+        match lexer.next() {
+            Err(LexerError::InvalidState { .. }) => {}
+            other => panic!("expected InvalidState, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn invalid_snapshot_is_reported() {
+        let rules = vec![LexerRule {
+            pattern: r"[a-z]+",
+            kind: "ident",
+            keep: true,
+            modification: StateModification::None,
+        }];
+
+        let mut lexer = LazyStatefulLexer::new("one", rules).expect("lexer should build");
+
+        let mut snapshot = lexer.snapshot();
+        // Corrupt the snapshot so that the token_buffer_index is out of range.
+        snapshot.token_buffer_index = 10;
+
+        match lexer.restore(snapshot) {
+            Some(LexerError::InvalidSnapshot { .. }) => {}
+            other => panic!("expected InvalidSnapshot, got {:?}", other),
+        }
     }
 }
