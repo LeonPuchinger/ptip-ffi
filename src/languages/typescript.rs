@@ -1,5 +1,3 @@
-use std::vec;
-
 use crate::{
     config::LanguageConfig,
     features::LanguageFeature,
@@ -32,32 +30,96 @@ fn function_definitions(lexer: &mut dyn lexer::Lexer) -> Result<Vec<LanguageFeat
     Ok(features)
 }
 
-static SOME_LEXER_RULES: &[LexerRule] = &[
+// Root lexer ruleset for TypeScript. This ruleset tokenizes top-level
+// statements (including function/type/interface/class declarations).
+static STATEMENTS: &[LexerRule] = &[
     LexerRule {
-        kind: "string_literal",
-        pattern: r#""([^"\\]|\\.)*""#,
-        keep: true,
-        modification: StateModification::PushLazy(&|| STRING_LITERALS),
+        pattern: r"[ \t\r\n]+",
+        kind: "whitespace",
+        keep: false,
+        modification: StateModification::None,
     },
     LexerRule {
-        kind: "string_literal",
-        pattern: r#"'([^'\\]|\\.)*'"#,
+        pattern: r"//[^\n]*",
+        kind: "line_comment",
+        keep: false,
+        modification: StateModification::None,
+    },
+    LexerRule {
+        pattern: r"(?s)/\*.*?\*/",
+        kind: "block_comment",
+        keep: false,
+        modification: StateModification::None,
+    },
+    LexerRule {
+        pattern: r"[A-Za-z_$][A-Za-z0-9_$]*",
+        kind: "identifier",
         keep: true,
+        modification: StateModification::None,
+    },
+    LexerRule {
+        pattern: r"[0-9]+(\.[0-9]+)?",
+        kind: "numeric_literal",
+        keep: true,
+        modification: StateModification::None,
+    },
+    LexerRule {
+        pattern: r#"\"([^"\\]|\\.)*\""#,
+        kind: "string_literal",
+        keep: true,
+        modification: StateModification::None,
+    },
+    LexerRule {
+        pattern: r#"'([^'\\]|\\.)*'"#,
+        kind: "string_literal",
+        keep: true,
+        modification: StateModification::None,
+    },
+    LexerRule {
+        pattern: r"=>",
+        kind: "arrow",
+        keep: true,
+        modification: StateModification::None,
+    },
+    LexerRule {
+        pattern: r"\(|\)",
+        kind: "parenthesis",
+        keep: true,
+        modification: StateModification::None,
+    },
+    LexerRule {
+        pattern: r"\{",
+        kind: "open_brace",
+        keep: true,
+        modification: StateModification::Push(BLOCK),
+    },
+    LexerRule {
+        pattern: r"[\[\]\.,;:<>=]",
+        kind: "punctuation",
+        keep: true,
+        modification: StateModification::None,
+    },
+    LexerRule {
+        pattern: r".",
+        kind: "unknown",
+        keep: false,
         modification: StateModification::None,
     },
 ];
 
-static STRING_LITERALS: &[LexerRule] = &[
+// Inside a block (e.g. function body), everything is treated as body content
+// and discarded by the lexer until the matching closing curly brace is found.
+static BLOCK: &[LexerRule] = &[
     LexerRule {
-        kind: "string_literal",
-        pattern: r#""([^"\\]|\\.)*""#,
+        pattern: r"\}",
+        kind: "closing_brace",
         keep: true,
-        modification: StateModification::Push(SOME_LEXER_RULES),
+        modification: StateModification::Pop,
     },
     LexerRule {
-        kind: "string_literal",
-        pattern: r#"'([^'\\]|\\.)*'"#,
-        keep: true,
+        pattern: r"[^}]+",
+        kind: "content",
+        keep: false,
         modification: StateModification::None,
     },
 ];
@@ -66,7 +128,7 @@ pub fn register() -> LanguageConfig {
     LanguageConfig {
         name: "TypeScript",
         build_lexer: |input| {
-            LazyStatefulLexer::new(input, SOME_LEXER_RULES.to_vec())
+            LazyStatefulLexer::new(input, STATEMENTS.to_vec())
                 .map(|lexer| Box::new(lexer) as Box<dyn lexer::Lexer>)
         },
         parser: function_definitions,
