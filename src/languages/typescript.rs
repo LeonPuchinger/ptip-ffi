@@ -52,6 +52,12 @@ static STATEMENTS: &[LexerRule] = &[
         modification: StateModification::None,
     },
     LexerRule {
+        pattern: r"\b(function|class)\b",
+        kind: "keyword",
+        keep: true,
+        modification: StateModification::None,
+    },
+    LexerRule {
         pattern: r"[A-Za-z_$][A-Za-z0-9_$]*",
         kind: "identifier",
         keep: true,
@@ -100,8 +106,8 @@ static STATEMENTS: &[LexerRule] = &[
         modification: StateModification::None,
     },
     LexerRule {
-        pattern: r".",
-        kind: "unknown",
+        pattern: r#"[^\s\w$"'()/\[\]\.,;:<>=]+"#,
+        kind: "irrelevant",
         keep: false,
         modification: StateModification::None,
     },
