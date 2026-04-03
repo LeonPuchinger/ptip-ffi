@@ -111,11 +111,12 @@ impl From<regex::Error> for LexerError {
 /// A snapshot of the lexer's state, which can be used to restore the lexer to a
 /// previous position. The snapshot can be created using `Lexer::snapshot` and
 /// restored using `Lexer::restore`.
+#[derive(Copy, Clone)]
 pub struct LexerState {
-    token_buffer_index: usize,
-    input_cursor: usize,
-    input_row: usize,
-    input_column: usize,
+    pub token_buffer_index: usize,
+    pub input_cursor: usize,
+    pub input_row: usize,
+    pub input_column: usize,
 }
 
 // A pull-based lexer that allows its caller to save and restore its state
@@ -124,6 +125,14 @@ pub trait Lexer<'a> {
     fn next(&mut self) -> Result<Token<'a>, LexerError>;
     fn snapshot(&self) -> LexerState;
     fn restore(&mut self, state: LexerState) -> Option<LexerError>;
+    fn peek(&mut self) -> Result<Token<'a>, LexerError> {
+        let snapshot = self.snapshot();
+        let next = self.next();
+        if let Some(e) = self.restore(snapshot) {
+            return Err(e);
+        }
+        next
+    }
 }
 
 /// A collection of compiled lexer rules. To match a token, the lexer only

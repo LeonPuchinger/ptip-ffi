@@ -1,6 +1,7 @@
 use crate::{
     config::LanguageConfig,
     features::LanguageFeature,
+    map,
     parser::{
         ParserError,
         atoms::{exact, token_kind},
@@ -11,10 +12,10 @@ use crate::{
 fn keyworded_function_definition(
     lexer: &mut dyn lexer::Lexer,
 ) -> Result<LanguageFeature, ParserError> {
-    let _keyword = exact("function")(lexer)?;
+    exact("function")(lexer)?;
     let name = token_kind("identifier")(lexer)?;
-    let _open_parenthesis = exact("(")(lexer)?;
-    let _close_parenthesis = exact(")")(lexer)?;
+    exact("(")(lexer)?;
+    exact(")")(lexer)?;
     Ok(LanguageFeature::Function {
         name,
         args: Vec::new(),
@@ -22,10 +23,42 @@ fn keyworded_function_definition(
     })
 }
 
-fn function_definitions(lexer: &mut dyn lexer::Lexer) -> Result<Vec<LanguageFeature>, ParserError> {
+fn statements(lexer: &mut dyn lexer::Lexer) -> Result<Vec<LanguageFeature>, ParserError> {
+    let anchors = map! {
+        ("keyword", "function") => vec![keyworded_function_definition]
+    };
     let mut features = Vec::new();
-    while let Ok(feature) = keyworded_function_definition(lexer) {
-        features.push(feature);
+    'anchor: loop {
+        let next = match lexer.peek() {
+            Ok(token) => token,
+            Err(lexer::LexerError::Eof) => break 'anchor,
+            Err(error) => return Err(error.into()),
+        };
+        if let Some(parsers) = anchors.get(&(next.kind, next.text)) {
+            let before_anchor = lexer.snapshot();
+            for parser in parsers {
+                lexer.restore(before_anchor);
+                if let Ok(feature) = parser(lexer) {
+                    features.push(feature);
+                    // Assert whether the successful parser actually consumed any tokens
+                    if lexer.snapshot().input_cursor == before_anchor.input_cursor {
+                        return Err(ParserError::Custom(format!(
+                            "Parser for anchor {:?} did not consume any tokens",
+                            (next.kind, next.text)
+                        )));
+                    }
+                    continue 'anchor;
+                }
+            }
+            lexer.restore(before_anchor);
+        }
+        // No parser matched or the token is not an anchor.
+        // In either case, the lexer needs to be advanced one token.
+        match lexer.next() {
+            Ok(_) => continue,
+            Err(lexer::LexerError::Eof) => break 'anchor,
+            Err(e) => return Err(e.into()),
+        }
     }
     Ok(features)
 }
@@ -137,6 +170,6 @@ pub fn register() -> LanguageConfig {
             LazyStatefulLexer::new(input, STATEMENTS.to_vec())
                 .map(|lexer| Box::new(lexer) as Box<dyn lexer::Lexer>)
         },
-        parser: function_definitions,
+        parser: statements,
     }
 }
