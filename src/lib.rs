@@ -7,7 +7,7 @@ mod languages;
 mod parser;
 mod util;
 
-pub fn initialize() -> Vec<LanguageConfig> {
+pub fn initialize() -> Vec<LanguageConfig<'static>> {
     languages::register_languages()
 }
 

@@ -1,9 +1,11 @@
-use super::lexer::{Lexer, LexerError};
-use super::{Parser, ParserError};
+use crate::parser::{
+    Parser, ParserError,
+    lexer::{Lexer, LexerError},
+};
 
 /// A parser that matches a token based on its kind.
 pub fn token_kind<'a>(expected_kind: &'a str) -> Parser<'a, String> {
-    Box::new(move |lexer: &mut dyn Lexer<'a>| {
+    Box::new(move |lexer: &mut dyn Lexer<'_>| {
         let snapshot = lexer.snapshot();
         let token = lexer.next()?;
         if token.kind == expected_kind {
@@ -21,7 +23,7 @@ pub fn token_kind<'a>(expected_kind: &'a str) -> Parser<'a, String> {
 /// A parser that matches a specific sequence of text from the input.
 /// It should be mentioned, however, that the expected text has to align with token boundaries.
 pub fn exact<'a>(expected_text: &'a str) -> Parser<'a, String> {
-    Box::new(move |lexer: &mut dyn Lexer<'a>| {
+    Box::new(move |lexer: &mut dyn Lexer<'_>| {
         let snapshot = lexer.snapshot();
         let mut matched = String::new();
         while matched.len() < expected_text.len() {
