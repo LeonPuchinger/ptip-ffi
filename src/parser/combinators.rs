@@ -15,11 +15,15 @@ pub fn optional<'a, R: 'a>(parser: Parser<'a, R>) -> Parser<'a, Option<R>> {
     })
 }
 
-/// Represents a specific location in the token stream that can be used as an anchor for parsing.
-#[derive(Eq, Hash, PartialEq, Debug)]
-pub struct AnchorLocation<'a> {
-    pub token_kind: &'a str,
-    pub text: &'a str,
+/// Represents a specific location in the token stream that can be used as an
+/// anchor for parsing.
+#[derive(Debug, PartialEq, Eq, Hash)]
+pub enum AnchorLocation<'a> {
+    /// Anchor based on token kind only (e.g. any "identifier" token).
+    Kind(&'a str),
+    /// Anchor based on both token kind and exact text (e.g. a "keyword" token
+    /// with text "function").
+    Exact { token_kind: &'a str, text: &'a str },
 }
 
 /// Returns a parser that iterates over the token stream, looking for tokens that
@@ -28,7 +32,7 @@ pub struct AnchorLocation<'a> {
 /// is added to the list of return values. If no parser matches or the token is
 /// not an anchor, the lexer advances by one token and continues searching.
 pub fn parse_at_anchors<'a, R: 'a>(
-    anchors: std::collections::HashMap<AnchorLocation<'static>, Vec<Parser<'a, R>>>,
+    anchors: std::collections::HashMap<AnchorLocation<'a>, Vec<Parser<'a, R>>>,
 ) -> Parser<'a, Vec<R>> {
     Box::new(move |lexer: &mut dyn Lexer<'_>| {
         let mut features = Vec::new();
@@ -38,10 +42,13 @@ pub fn parse_at_anchors<'a, R: 'a>(
                 Err(LexerError::Eof) => break 'anchor,
                 Err(error) => return Err(error.into()),
             };
-            if let Some(parsers) = anchors.get(&AnchorLocation {
-                token_kind: next.kind,
-                text: next.text,
-            }) {
+            if let Some(parsers) = anchors
+                .get(&AnchorLocation::Exact {
+                    token_kind: next.kind,
+                    text: next.text,
+                })
+                .or_else(|| anchors.get(&AnchorLocation::Kind(next.kind)))
+            {
                 let before_anchor = lexer.snapshot();
                 for parser in parsers {
                     lexer.restore(before_anchor);
@@ -172,7 +179,7 @@ mod tests {
         let mut anchors: HashMap<AnchorLocation<'static>, Vec<Parser<'static, String>>> =
             HashMap::new();
         anchors.insert(
-            AnchorLocation {
+            AnchorLocation::Exact {
                 token_kind: "A",
                 text: "@",
             },
@@ -212,6 +219,111 @@ mod tests {
     }
 
     #[test]
+    fn parse_at_anchors_supports_kind_only_anchors() {
+        let mut anchors: HashMap<AnchorLocation<'static>, Vec<Parser<'static, String>>> =
+            HashMap::new();
+        anchors.insert(
+            AnchorLocation::Kind("A"),
+            vec![Box::new(|lexer: &mut dyn Lexer<'_>| {
+                let anchor = lexer.next()?;
+                if anchor.kind != "A" {
+                    return Err(ParserError::UnexpectedToken {
+                        expected: "A".into(),
+                        found: anchor.kind.into(),
+                    });
+                }
+                let value = lexer.next()?;
+                if value.kind != "V" {
+                    return Err(ParserError::UnexpectedToken {
+                        expected: "V".into(),
+                        found: value.kind.into(),
+                    });
+                }
+                Ok(value.text.to_string())
+            })],
+        );
+
+        let mut lexer = TestLexer::new(vec![
+            tok("N", "x"),
+            tok("A", "@"),
+            tok("V", "one"),
+            tok("N", "y"),
+            tok("A", "#"),
+            tok("V", "two"),
+        ]);
+
+        let parser = parse_at_anchors(anchors);
+        let result = parser(&mut lexer).unwrap();
+
+        assert_eq!(result, vec!["one".to_string(), "two".to_string()]);
+        assert_eq!(lexer.snapshot().token_buffer_index, 6);
+    }
+
+    #[test]
+    fn parse_at_anchors_prefers_exact_anchor_over_kind_anchor() {
+        let mut anchors: HashMap<AnchorLocation<'static>, Vec<Parser<'static, String>>> =
+            HashMap::new();
+
+        anchors.insert(
+            AnchorLocation::Kind("A"),
+            vec![Box::new(|lexer: &mut dyn Lexer<'_>| {
+                let anchor = lexer.next()?;
+                if anchor.kind != "A" {
+                    return Err(ParserError::UnexpectedToken {
+                        expected: "A".into(),
+                        found: anchor.kind.into(),
+                    });
+                }
+                let value = lexer.next()?;
+                if value.kind != "V" {
+                    return Err(ParserError::UnexpectedToken {
+                        expected: "V".into(),
+                        found: value.kind.into(),
+                    });
+                }
+                Ok(format!("kind:{}", value.text))
+            })],
+        );
+
+        anchors.insert(
+            AnchorLocation::Exact {
+                token_kind: "A",
+                text: "@",
+            },
+            vec![Box::new(|lexer: &mut dyn Lexer<'_>| {
+                let anchor = lexer.next()?;
+                if anchor.kind != "A" || anchor.text != "@" {
+                    return Err(ParserError::UnexpectedToken {
+                        expected: "A:@".into(),
+                        found: format!("{}:{}", anchor.kind, anchor.text),
+                    });
+                }
+                let value = lexer.next()?;
+                if value.kind != "V" {
+                    return Err(ParserError::UnexpectedToken {
+                        expected: "V".into(),
+                        found: value.kind.into(),
+                    });
+                }
+                Ok(format!("exact:{}", value.text))
+            })],
+        );
+
+        let mut lexer = TestLexer::new(vec![
+            tok("A", "@"),
+            tok("V", "one"),
+            tok("A", "#"),
+            tok("V", "two"),
+        ]);
+
+        let parser = parse_at_anchors(anchors);
+        let result = parser(&mut lexer).unwrap();
+
+        assert_eq!(result, vec!["exact:one".to_string(), "kind:two".to_string()]);
+        assert_eq!(lexer.snapshot().token_buffer_index, 4);
+    }
+
+    #[test]
     fn parse_at_anchors_tries_parsers_in_order_and_restores_between_attempts() {
         let mut anchors: HashMap<AnchorLocation<'static>, Vec<Parser<'static, &'static str>>> =
             HashMap::new();
@@ -240,7 +352,7 @@ mod tests {
             });
 
         anchors.insert(
-            AnchorLocation {
+            AnchorLocation::Exact {
                 token_kind: "A",
                 text: "@",
             },
@@ -260,7 +372,7 @@ mod tests {
         let mut anchors: HashMap<AnchorLocation<'static>, Vec<Parser<'static, String>>> =
             HashMap::new();
         anchors.insert(
-            AnchorLocation {
+            AnchorLocation::Exact {
                 token_kind: "A",
                 text: "@",
             },
@@ -283,7 +395,7 @@ mod tests {
 
         let mut anchors2 = anchors;
         anchors2.insert(
-            AnchorLocation {
+            AnchorLocation::Exact {
                 token_kind: "A",
                 text: "@",
             },
@@ -319,7 +431,7 @@ mod tests {
         let mut anchors: HashMap<AnchorLocation<'static>, Vec<Parser<'static, ()>>> =
             HashMap::new();
         anchors.insert(
-            AnchorLocation {
+            AnchorLocation::Exact {
                 token_kind: "A",
                 text: "@",
             },

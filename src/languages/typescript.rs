@@ -130,7 +130,7 @@ pub fn register() -> LanguageConfig<'static> {
                 .map(|lexer| Box::new(lexer) as Box<dyn lexer::Lexer>)
         },
         parser: parse_at_anchors(map! {
-            AnchorLocation { token_kind: "keyword", text: "function" } => vec![
+            AnchorLocation::Exact { token_kind: "keyword", text: "function" } => vec![
                 Box::new(keyworded_function_definition) as Parser<LanguageFeature>,
             ]
         }),
