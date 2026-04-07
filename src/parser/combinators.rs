@@ -6,12 +6,19 @@ use super::lexer::Lexer;
 
 /// Turns any parser into a parser that cannot fail. When the nested parser
 /// succeeds, its result is wrapped in `Some`. If the nested parser encounters
-/// an unexpected token, returns `None` instead.
+/// an unexpected token, returns `None` instead. Also, in the latter case,
+/// the input stream remains unchanged.
 pub fn optional<'a, R: 'a>(parser: Parser<'a, R>) -> Parser<'a, Option<R>> {
-    Box::new(move |lexer: &mut dyn Lexer<'_>| match parser(lexer) {
-        Ok(result) => Ok(Some(result)),
-        Err(ParserError::UnexpectedToken { .. }) => Ok(None),
-        Err(e) => Err(e),
+    Box::new(move |lexer: &mut dyn Lexer<'_>| {
+        let snapshot = lexer.snapshot();
+        match parser(lexer) {
+            Ok(result) => Ok(Some(result)),
+            Err(ParserError::UnexpectedToken { .. }) => {
+                lexer.restore(snapshot);
+                Ok(None)
+            }
+            Err(e) => Err(e),
+        }
     })
 }
 
@@ -319,7 +326,10 @@ mod tests {
         let parser = parse_at_anchors(anchors);
         let result = parser(&mut lexer).unwrap();
 
-        assert_eq!(result, vec!["exact:one".to_string(), "kind:two".to_string()]);
+        assert_eq!(
+            result,
+            vec!["exact:one".to_string(), "kind:two".to_string()]
+        );
         assert_eq!(lexer.snapshot().token_buffer_index, 4);
     }
 

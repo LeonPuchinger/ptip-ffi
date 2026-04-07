@@ -1,23 +1,56 @@
 use crate::{
     config::LanguageConfig,
-    features::LanguageFeature,
+    features::{FunctionParameter, LanguageFeature, Type},
     map,
     parser::{
         Parser, ParserError,
         atoms::{exact, token_kind},
-        combinators::{AnchorLocation, parse_at_anchors},
+        combinators::{AnchorLocation, optional, parse_at_anchors},
         lexer::{self, LazyStatefulLexer, Lexer, LexerRule, StateModification},
     },
 };
+
+fn function_parameter(lexer: &mut dyn Lexer) -> Result<FunctionParameter, ParserError> {
+    let parameter_name = token_kind("identifier")(lexer)?;
+    let required = optional(exact("?"))(lexer)?.is_none();
+    exact(":")(lexer)?;
+    let parameter_type = optional(token_kind("identifier"))(lexer)?;
+    Ok(FunctionParameter {
+        name: parameter_name,
+        r#type: parameter_type.map(|type_name| Type {
+            name: type_name,
+            path: Vec::new(),
+        }),
+        required,
+    })
+}
+
+fn function_parameters(lexer: &mut dyn Lexer) -> Result<Vec<FunctionParameter>, ParserError> {
+    let mut params = Vec::new();
+    loop {
+        match optional(Box::new(function_parameter))(lexer)? {
+            Some(param) => params.push(param),
+            None => break,
+        }
+        match optional(exact(","))(lexer)? {
+            Some(_) => continue,
+            None => break,
+        }
+    }
+    Ok(params)
+}
 
 fn keyworded_function_definition(lexer: &mut dyn Lexer) -> Result<LanguageFeature, ParserError> {
     exact("function")(lexer)?;
     let name = token_kind("identifier")(lexer)?;
     exact("(")(lexer)?;
+    let parameters = function_parameters(lexer)?;
     exact(")")(lexer)?;
+    exact("{")(lexer)?;
+    exact("}")(lexer)?;
     Ok(LanguageFeature::Function {
         name,
-        args: Vec::new(),
+        args: parameters,
         return_type: String::new(),
     })
 }
