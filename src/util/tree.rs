@@ -50,7 +50,6 @@ impl<'a, T> ClusteredTree<'a, T> {
                 .get(direction.cluster_index)
                 .ok_or(ClusteredTreeError::InvalidIndex)?;
         }
-
         Ok((node, items_until_node))
     }
 
@@ -77,7 +76,6 @@ impl<'a, T> ClusteredTree<'a, T> {
                 .ok_or(ClusteredTreeError::InvalidIndex)?;
             return Self::node_at_from_directions_mut(next_node, items_until_next, rest);
         }
-
         Ok((node, items_until_node))
     }
 
@@ -131,8 +129,14 @@ impl<'a, T> ClusteredTree<'a, T> {
         Ok(())
     }
 
-    /// The clustered tree starts at `index` now.
-    pub fn reroot(&mut self, index: &ClusteredTreeIndex<'a>) -> Result<(), ClusteredTreeError> {
+    /// Adjust the tree so that the node at `index` becomes the new root.
+    /// If `keep_counters` is `true`, `previous_items` counters are left in
+    /// their original (pre-reroot) coordinate system.
+    pub fn reroot(
+        &mut self,
+        index: &ClusteredTreeIndex<'a>,
+        keep_counters: bool,
+    ) -> Result<(), ClusteredTreeError> {
         fn shift_descendants_previous_items<'a, T>(
             cluster: &mut Cluster<'a, T>,
             shift: usize,
@@ -150,32 +154,28 @@ impl<'a, T> ClusteredTree<'a, T> {
         }
 
         let shift = self.node_at(index)?.1;
-
         if index.directions.is_empty() {
             let local_index = index.root_index;
             if local_index >= self.root.items.len() {
                 return Err(ClusteredTreeError::InvalidIndex);
             }
-
             let new_root_items = self.root.items.split_off(local_index);
             self.root = Cluster {
-                previous_items: 0,
+                previous_items: if keep_counters { shift } else { 0 },
                 items: new_root_items,
             };
-
-            shift_descendants_previous_items(&mut self.root, shift)?;
+            if !keep_counters {
+                shift_descendants_previous_items(&mut self.root, shift)?;
+            }
             return Ok(());
         }
-
         let (prefix, last) = index.directions.split_at(index.directions.len() - 1);
-
         let root_node = self
             .root
             .items
             .get_mut(index.root_index)
             .ok_or(ClusteredTreeError::InvalidIndex)?;
         let (parent, _) = Self::node_at_from_directions_mut(root_node, index.root_index, prefix)?;
-
         let mut new_root_cluster = parent
             .branches
             .remove(last[0].branch)
@@ -184,14 +184,14 @@ impl<'a, T> ClusteredTree<'a, T> {
         if last[0].cluster_index >= new_root_cluster.items.len() {
             return Err(ClusteredTreeError::InvalidIndex);
         }
-
         let new_root_items = new_root_cluster.items.split_off(last[0].cluster_index);
         self.root = Cluster {
-            previous_items: 0,
+            previous_items: if keep_counters { shift } else { 0 },
             items: new_root_items,
         };
-
-        shift_descendants_previous_items(&mut self.root, shift)?;
+        if !keep_counters {
+            shift_descendants_previous_items(&mut self.root, shift)?;
+        }
         Ok(())
     }
 }
@@ -315,8 +315,31 @@ mod tests {
         // Index semantics: start at root_index; then for each direction: follow `branch`, then pick `cluster_index`.
         // Reroot to "c" (follow branch "x", then pick index 1).
         // items_until_index is ignored for current methods; reroot computes the shift while traversing.
-        tree.reroot(&idx(0, 999, vec![("x", 1)])).unwrap();
+        tree.reroot(&idx(0, 999, vec![("x", 1)]), false).unwrap();
 
         assert_eq!(tree.at(&idx(0, 0, vec![])).unwrap(), "c");
+    }
+
+    #[test]
+    fn reroot_keep_counters_does_not_shift_previous_items() {
+        let mut tree: ClusteredTree<'static, String> = ClusteredTree {
+            root: Cluster {
+                previous_items: 0,
+                items: vec![node("a")],
+            },
+        };
+
+        // Make a branch cluster with a deliberately non-trivial previous_items.
+        tree.root.items[0].branches.insert(
+            "x",
+            Cluster {
+                previous_items: 10,
+                items: vec![node("b"), node("c")],
+            },
+        );
+
+        tree.reroot(&idx(0, 0, vec![("x", 1)]), true).unwrap();
+        assert_eq!(tree.at(&idx(0, 0, vec![])).unwrap(), "c");
+        assert_eq!(tree.root.previous_items, 2);
     }
 }
