@@ -26,11 +26,13 @@ impl<'a, T> ClusteredTree<'a, T> {
     }
 
     /// Walk the tree using `directions` starting from `node` and return the node
-    /// at the end of the path along with the number of items passed on the path
-    /// to that node (including the node itself).
+    /// at the end of the path along with the absolute index of that node.
+    ///
+    /// Note: the indices in `ClusteredTreeIndex` and `IndexDirection` are local indices.
+    /// The absolute index is derived using the `previous_items` counters stored in clusters.
     fn node_at_from_directions<'b>(
         mut node: &'b Node<'a, T>,
-        mut items_until_node: usize,
+        mut absolute_index: usize,
         directions: &[IndexDirection<'a>],
     ) -> Result<(&'b Node<'a, T>, usize), ClusteredTreeError> {
         for direction in directions {
@@ -39,10 +41,9 @@ impl<'a, T> ClusteredTree<'a, T> {
                 .get(direction.branch)
                 .ok_or(ClusteredTreeError::InvalidIndex)?;
 
-            // In the linearization model used for counting, the branch cluster starts right after the current node.
-            items_until_node = items_until_node
-                .checked_add(1)
-                .and_then(|v| v.checked_add(direction.cluster_index))
+            absolute_index = cluster
+                .previous_items
+                .checked_add(direction.cluster_index)
                 .ok_or(ClusteredTreeError::InvalidIndex)?;
 
             node = cluster
@@ -50,33 +51,34 @@ impl<'a, T> ClusteredTree<'a, T> {
                 .get(direction.cluster_index)
                 .ok_or(ClusteredTreeError::InvalidIndex)?;
         }
-        Ok((node, items_until_node))
+            Ok((node, absolute_index))
     }
 
     /// Similar to `node_at_from_directions`, but
     /// returns a mutable reference to the node.
     fn node_at_from_directions_mut<'b>(
         node: &'b mut Node<'a, T>,
-        items_until_node: usize,
+        absolute_index: usize,
         directions: &[IndexDirection<'a>],
     ) -> Result<(&'b mut Node<'a, T>, usize), ClusteredTreeError> {
         if let Some((first, rest)) = directions.split_first() {
-            let items_until_next = items_until_node
-                .checked_add(1)
-                .and_then(|v| v.checked_add(first.cluster_index))
-                .ok_or(ClusteredTreeError::InvalidIndex)?;
-
             let cluster = node
                 .branches
                 .get_mut(first.branch)
                 .ok_or(ClusteredTreeError::InvalidIndex)?;
+
+            let absolute_index_next = cluster
+                .previous_items
+                .checked_add(first.cluster_index)
+                .ok_or(ClusteredTreeError::InvalidIndex)?;
+
             let next_node = cluster
                 .items
                 .get_mut(first.cluster_index)
                 .ok_or(ClusteredTreeError::InvalidIndex)?;
-            return Self::node_at_from_directions_mut(next_node, items_until_next, rest);
+            return Self::node_at_from_directions_mut(next_node, absolute_index_next, rest);
         }
-        Ok((node, items_until_node))
+        Ok((node, absolute_index))
     }
 
     /// Walk the tree using `index` and return the node at that index along with
@@ -90,7 +92,12 @@ impl<'a, T> ClusteredTree<'a, T> {
             .items
             .get(index.root_index)
             .ok_or(ClusteredTreeError::InvalidIndex)?;
-        Self::node_at_from_directions(root_node, index.root_index, &index.directions)
+        let absolute_index = self
+            .root
+            .previous_items
+            .checked_add(index.root_index)
+            .ok_or(ClusteredTreeError::InvalidIndex)?;
+        Self::node_at_from_directions(root_node, absolute_index, &index.directions)
     }
 
     /// Similar to `node_at`, but returns a mutable reference to the node.
@@ -98,12 +105,16 @@ impl<'a, T> ClusteredTree<'a, T> {
         &mut self,
         index: &ClusteredTreeIndex<'a>,
     ) -> Result<(&mut Node<'a, T>, usize), ClusteredTreeError> {
+        let root_previous_items = self.root.previous_items;
         let root_node = self
             .root
             .items
             .get_mut(index.root_index)
             .ok_or(ClusteredTreeError::InvalidIndex)?;
-        Self::node_at_from_directions_mut(root_node, index.root_index, &index.directions)
+        let absolute_index = root_previous_items
+            .checked_add(index.root_index)
+            .ok_or(ClusteredTreeError::InvalidIndex)?;
+        Self::node_at_from_directions_mut(root_node, absolute_index, &index.directions)
     }
 
     /// Create a new empty branch at `index`.
@@ -112,14 +123,14 @@ impl<'a, T> ClusteredTree<'a, T> {
         index: &ClusteredTreeIndex<'a>,
         name: &'a str,
     ) -> Result<(), ClusteredTreeError> {
-        let (node, items_until_node) = self.node_at_mut(index)?;
+        let (node, absolute_index) = self.node_at_mut(index)?;
 
         if node.branches.contains_key(name) {
             return Err(ClusteredTreeError::InvalidIndex);
         }
 
         let new_cluster = Cluster {
-            previous_items: items_until_node
+            previous_items: absolute_index
                 .checked_add(1)
                 .ok_or(ClusteredTreeError::InvalidIndex)?,
             items: Vec::new(),
@@ -170,12 +181,16 @@ impl<'a, T> ClusteredTree<'a, T> {
             return Ok(());
         }
         let (prefix, last) = index.directions.split_at(index.directions.len() - 1);
+        let root_previous_items = self.root.previous_items;
+        let root_absolute_index = root_previous_items
+            .checked_add(index.root_index)
+            .ok_or(ClusteredTreeError::InvalidIndex)?;
         let root_node = self
             .root
             .items
             .get_mut(index.root_index)
             .ok_or(ClusteredTreeError::InvalidIndex)?;
-        let (parent, _) = Self::node_at_from_directions_mut(root_node, index.root_index, prefix)?;
+        let (parent, _) = Self::node_at_from_directions_mut(root_node, root_absolute_index, prefix)?;
         let mut new_root_cluster = parent
             .branches
             .remove(last[0].branch)
@@ -340,6 +355,6 @@ mod tests {
 
         tree.reroot(&idx(0, 0, vec![("x", 1)]), true).unwrap();
         assert_eq!(tree.at(&idx(0, 0, vec![])).unwrap(), "c");
-        assert_eq!(tree.root.previous_items, 2);
+        assert_eq!(tree.root.previous_items, 11);
     }
 }
