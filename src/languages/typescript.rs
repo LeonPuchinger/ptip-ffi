@@ -122,7 +122,7 @@ static STATEMENTS: &[LexerRule] = &[
         pattern: r"\{",
         kind: "open_brace",
         keep: true,
-        modification: StateModification::Push(BLOCK),
+        modification: StateModification::Push("block"),
     },
     LexerRule {
         pattern: r"[\[\]\.,;:<>=]",
@@ -159,8 +159,15 @@ pub fn register() -> LanguageConfig<'static> {
     LanguageConfig {
         name: "TypeScript",
         build_lexer: |input| {
-            LazyStatefulLexer::new(input, STATEMENTS.to_vec())
-                .map(|lexer| Box::new(lexer) as Box<dyn lexer::Lexer>)
+            LazyStatefulLexer::new(
+                input,
+                map! {
+                    "statements" => STATEMENTS.to_vec(),
+                    "block" => BLOCK.to_vec(),
+                },
+                "statements",
+            )
+            .map(|lexer| Box::new(lexer) as Box<dyn lexer::Lexer>)
         },
         parser: parse_at_anchors(map! {
             AnchorLocation::Exact { token_kind: "keyword", text: "function" } => vec![
