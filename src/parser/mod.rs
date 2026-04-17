@@ -23,6 +23,7 @@ impl From<LexerError> for ParserError {
             LexerError::InvalidSnapshot { message } => ParserError::InternalError(message),
             LexerError::InvalidState { message } => ParserError::InternalError(message),
             LexerError::InvalidRule { message } => ParserError::InternalError(message),
+            LexerError::InvalidDefaultState { message, .. } => ParserError::InternalError(message),
             LexerError::Custom { message } => ParserError::Custom(message),
         }
     }
