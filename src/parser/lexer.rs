@@ -163,10 +163,10 @@ pub struct LazyStatefulLexer<'input> {
 impl<'input> LazyStatefulLexer<'input> {
     pub fn new(
         input: &'input str,
-        rules: HashMap<&'static str, LexerRuleset>,
+        rulesets: HashMap<&'static str, LexerRuleset>,
         default: &'static str,
     ) -> Result<Self, LexerError> {
-        if !rules.contains_key(default) {
+        if !rulesets.contains_key(default) {
             return Err(LexerError::InvalidDefaultState {
                 supplied_state: default,
                 message: format!(
@@ -175,13 +175,23 @@ impl<'input> LazyStatefulLexer<'input> {
                 ),
             });
         }
-        let compiled_rulesets = rules
+        let compiled_rulesets = rulesets
             .iter()
             .map(|(&name, rules)| {
                 let compiled_rules = rules
                     .iter()
                     .map(|rule| {
                         let pattern = Regex::new(rule.pattern)?;
+                        if let StateModification::Push(target) = rule.modification {
+                            if !rulesets.contains_key(target) {
+                                return Err(LexerError::InvalidRule {
+                                    message: format!(
+                                        "The rule with the pattern '{}' tries to push the ruleset '{}' which is not defined in the provided rulesets.",
+                                        rule.pattern, target
+                                    ),
+                                });
+                            }
+                        }
                         Ok(CompiledLexerRule {
                             pattern,
                             kind: rule.kind,
