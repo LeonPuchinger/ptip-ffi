@@ -136,6 +136,19 @@ type LexerRuleset = Vec<LexerRule>;
 /// which contain compiled regex patterns.
 type CompiledLexerRuleset = Vec<CompiledLexerRule>;
 
+/// When a token is emitted from the token buffer of the lexer, the lexer state
+/// needs to be updated to reflect that the token has been consumed. For instance,
+/// the input cursor needs to be moved forward by the length of the emitted
+/// token. This struct represents the necessary information to update the lexer
+/// state when a token is emitted from the token buffer alongside the token itself.
+struct TokenBufferEntry<'input> {
+    token: Token<'input>,
+    input_cursor_after: usize,
+    input_row_after: usize,
+    input_column_after: usize,
+    state_modification_after: StateModification,
+}
+
 /// A lexer that takes an input string and a set of rules and produces a stream
 /// of tokens. The lexer is pull-based and lazy, meaning that it only produces
 /// tokens when requested and only processes the minimum amount of input
@@ -153,7 +166,7 @@ pub struct LazyStatefulLexer<'input> {
     input: &'input str,
     rulesets: HashMap<&'static str, CompiledLexerRuleset>,
     state: Vec<&'static str>,
-    token_buffer: Vec<Token<'input>>,
+    token_buffer: Vec<TokenBufferEntry<'input>>,
     token_buffer_index: usize,
     input_cursor: usize,
     input_row: usize,
@@ -182,8 +195,8 @@ impl<'input> LazyStatefulLexer<'input> {
                     .iter()
                     .map(|rule| {
                         let pattern = Regex::new(rule.pattern)?;
-                        if let StateModification::Push(target) = rule.modification {
-                            if !rulesets.contains_key(target) {
+                        if let StateModification::Push(target) = rule.modification
+                            && !rulesets.contains_key(target) {
                                 return Err(LexerError::InvalidRule {
                                     message: format!(
                                         "The rule with the pattern '{}' tries to push the ruleset '{}' which is not defined in the provided rulesets.",
@@ -191,7 +204,6 @@ impl<'input> LazyStatefulLexer<'input> {
                                     ),
                                 });
                             }
-                        }
                         Ok(CompiledLexerRule {
                             pattern,
                             kind: rule.kind,
@@ -226,9 +238,34 @@ impl<'input> Lexer<'input> for LazyStatefulLexer<'input> {
     fn next(&mut self) -> Result<Token<'input>, LexerError> {
         if self.token_buffer_index < self.token_buffer.len() {
             // Return the next token from the buffer if available
-            let token = &self.token_buffer[self.token_buffer_index];
+            let entry = &self.token_buffer[self.token_buffer_index];
             self.token_buffer_index += 1;
-            Ok(token.clone())
+
+            // When replaying buffered tokens, we must also replay the lexer state
+            // transitions (cursor movement, line/column tracking, and state stack
+            // modification) so that subsequent lexing resumes from the correct
+            // position.
+            self.input_cursor = entry.input_cursor_after;
+            self.input_row = entry.input_row_after;
+            self.input_column = entry.input_column_after;
+            match entry.state_modification_after {
+                StateModification::None => {}
+                StateModification::Pop => {
+                    if self.state.len() <= 1 {
+                        return Err(LexerError::InvalidState {
+                            message: String::from(
+                                "The lexer state cannot be popped because it only contains one ruleset.",
+                            ),
+                        });
+                    }
+                    self.state.pop();
+                }
+                StateModification::Push(target_ruleset) => {
+                    self.state.push(target_ruleset);
+                }
+            }
+
+            Ok(entry.token.clone())
         } else {
             // Check whether the end of the input has been reached
             if self.input_cursor >= self.input.len() {
@@ -338,7 +375,13 @@ impl<'input> Lexer<'input> for LazyStatefulLexer<'input> {
                 position,
             };
             // Modify the token buffer
-            self.token_buffer.push(new_token.clone());
+            self.token_buffer.push(TokenBufferEntry {
+                token: new_token.clone(),
+                input_cursor_after: self.input_cursor,
+                input_row_after: self.input_row,
+                input_column_after: self.input_column,
+                state_modification_after: *best_modification,
+            });
             self.token_buffer_index += 1;
             Ok(new_token)
         }
