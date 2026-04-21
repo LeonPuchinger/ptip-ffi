@@ -104,6 +104,18 @@ impl<'branch_keys, T> BranchedList<'branch_keys, T> {
             root: Rc::clone(&self.root),
         }
     }
+
+    /// Returns the number of nodes in the root branch.
+    /// Note that this does not consider any branches that diverge from the root.
+    pub fn root_branch_size(&self) -> usize {
+        self.root.borrow().len()
+    }
+
+    /// Returns `true` if the root branch is empty, and `false` otherwise.
+    /// Note that this does not consider any branches that diverge from the root.
+    pub fn root_branch_empty(&self) -> bool {
+        self.root.borrow().is_empty()
+    }
 }
 
 struct Node<'branch_keys, T> {
