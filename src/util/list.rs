@@ -16,7 +16,13 @@ pub struct BranchedList<'branch_keys, T> {
 }
 
 impl<'branch_keys, T> BranchedList<'branch_keys, T> {
-    pub fn new(value: T) -> Self {
+    pub fn empty() -> Self {
+        Self {
+            root: Rc::new(RefCell::new(vec![])),
+        }
+    }
+
+    pub fn with_value(value: T) -> Self {
         Self {
             root: Rc::new(RefCell::new(vec![Node {
                 value,
