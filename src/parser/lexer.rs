@@ -431,6 +431,25 @@ impl<'input> Lexer<'input> for LazyStatefulLexer<'input> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::HashMap;
+
+    fn lexer_with_root_rules<'a>(input: &'a str, root_rules: Vec<LexerRule>) -> LazyStatefulLexer<'a> {
+        let mut rulesets: HashMap<&'static str, Vec<LexerRule>> = HashMap::new();
+        rulesets.insert("root", root_rules);
+        LazyStatefulLexer::new(input, rulesets, "root").expect("lexer should build")
+    }
+
+    fn rulesets_with_default(
+        default: &'static str,
+        rulesets: Vec<(&'static str, Vec<LexerRule>)>,
+    ) -> HashMap<&'static str, Vec<LexerRule>> {
+        let mut map: HashMap<&'static str, Vec<LexerRule>> = HashMap::new();
+        for (name, rules) in rulesets {
+            map.insert(name, rules);
+        }
+        assert!(map.contains_key(default), "test setup: default ruleset must exist");
+        map
+    }
 
     #[test]
     fn lexes_identifiers_and_skips_whitespace() {
@@ -449,7 +468,7 @@ mod tests {
             },
         ];
 
-        let mut lexer = LazyStatefulLexer::new("foo bar", rules).expect("lexer should build");
+        let mut lexer = lexer_with_root_rules("foo bar", rules);
 
         let first = lexer.next().expect("first token");
         assert_eq!(first.kind, "ident");
@@ -482,7 +501,7 @@ mod tests {
             },
         ];
 
-        let mut lexer = LazyStatefulLexer::new("foobar", rules).expect("lexer should build");
+        let mut lexer = lexer_with_root_rules("foobar", rules);
         let token = lexer.next().expect("token");
         assert_eq!(token.kind, "foobar");
         assert_eq!(token.text, "foobar");
@@ -505,7 +524,7 @@ mod tests {
             },
         ];
 
-        let mut lexer = LazyStatefulLexer::new("ab", rules).expect("lexer should build");
+        let mut lexer = lexer_with_root_rules("ab", rules);
         let token = lexer.next().expect("token");
         assert_eq!(token.kind, "first");
         assert_eq!(token.text, "ab");
@@ -528,7 +547,7 @@ mod tests {
             },
         ];
 
-        let mut lexer = LazyStatefulLexer::new("one two", rules).expect("lexer should build");
+        let mut lexer = lexer_with_root_rules("one two", rules);
 
         let first = lexer.next().expect("first token");
         assert_eq!(first.text, "one");
@@ -539,7 +558,7 @@ mod tests {
         assert_eq!(second.text, "two");
 
         // Restore and read again; we should see the same second token.
-        assert!(lexer.restore(snapshot).is_none());
+        assert!(lexer.restore(&snapshot).is_none());
         let second_again = lexer.next().expect("second token after restore");
         assert_eq!(second_again.kind, second.kind);
         assert_eq!(second_again.text, second.text);
@@ -559,7 +578,7 @@ mod tests {
             modification: StateModification::None,
         }];
 
-        let mut lexer = LazyStatefulLexer::new("abc", rules).expect("lexer should build");
+        let mut lexer = lexer_with_root_rules("abc", rules);
 
         match lexer.next() {
             Err(LexerError::NoMatch) => {}
@@ -584,7 +603,7 @@ mod tests {
             },
         ];
 
-        let mut lexer = LazyStatefulLexer::new("\nabc", rules).expect("lexer should build");
+        let mut lexer = lexer_with_root_rules("\nabc", rules);
 
         // First token is whitespace with a newline, which is skipped.
         let token = lexer.next().expect("identifier after newline");
@@ -596,40 +615,49 @@ mod tests {
         assert_eq!(token.position.column_end, 3);
     }
 
-    static INNER_RULES: &[LexerRule] = &[LexerRule {
-        pattern: r"[0-9]+",
-        kind: "inner_number",
-        keep: true,
-        modification: StateModification::Pop,
-    }];
-
-    static ROOT_RULES: &[LexerRule] = &[
-        LexerRule {
-            pattern: r"\[",
-            kind: "lbracket",
-            keep: false,
-            modification: StateModification::Push(INNER_RULES),
-        },
-        LexerRule {
-            pattern: r"[0-9]+",
-            kind: "root_number",
-            keep: true,
-            modification: StateModification::None,
-        },
-        LexerRule {
-            pattern: r"\s+",
-            kind: "whitespace",
-            keep: false,
-            modification: StateModification::None,
-        },
-    ];
-
     #[test]
     fn push_and_pop_state_changes_ruleset() {
-        let mut lexer =
-            LazyStatefulLexer::new("[123 456", ROOT_RULES.to_vec()).expect("lexer should build");
+        let root_rules = vec![
+            LexerRule {
+                pattern: r"\[",
+                kind: "lbracket",
+                keep: true,
+                modification: StateModification::Push("inner"),
+            },
+            LexerRule {
+                pattern: r"[0-9]+",
+                kind: "root_number",
+                keep: true,
+                modification: StateModification::None,
+            },
+            LexerRule {
+                pattern: r"\s+",
+                kind: "whitespace",
+                keep: false,
+                modification: StateModification::None,
+            },
+        ];
 
-        // '[' pushes INNER_RULES and is discarded.
+        let inner_rules = vec![LexerRule {
+            pattern: r"[0-9]+",
+            kind: "inner_number",
+            keep: true,
+            modification: StateModification::Pop,
+        }];
+
+        let rulesets = rulesets_with_default(
+            "root",
+            vec![("root", root_rules), ("inner", inner_rules)],
+        );
+
+        let mut lexer = LazyStatefulLexer::new("[123 456", rulesets, "root").expect("lexer should build");
+
+        // '[' pushes the "inner" ruleset.
+        let bracket = lexer.next().expect("bracket token");
+        assert_eq!(bracket.kind, "lbracket");
+        assert_eq!(bracket.text, "[");
+
+        // In the "inner" ruleset, numbers are emitted as inner_number and pop back to root.
         let first = lexer.next().expect("inner number after bracket");
         assert_eq!(first.kind, "inner_number");
         assert_eq!(first.text, "123");
@@ -649,7 +677,7 @@ mod tests {
             modification: StateModification::Pop,
         }];
 
-        let mut lexer = LazyStatefulLexer::new("123", rules).expect("lexer should build");
+        let mut lexer = lexer_with_root_rules("123", rules);
 
         match lexer.next() {
             Err(LexerError::InvalidState { .. }) => {}
@@ -666,15 +694,86 @@ mod tests {
             modification: StateModification::None,
         }];
 
-        let mut lexer = LazyStatefulLexer::new("one", rules).expect("lexer should build");
+        let mut lexer = lexer_with_root_rules("one", rules);
 
         let mut snapshot = lexer.snapshot();
         // Corrupt the snapshot so that the token_buffer_index is out of range.
         snapshot.token_buffer_index = 10;
 
-        match lexer.restore(snapshot) {
+        match lexer.restore(&snapshot) {
             Some(LexerError::InvalidSnapshot { .. }) => {}
             other => panic!("expected InvalidSnapshot, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn invalid_default_state_is_reported() {
+        let mut rulesets: HashMap<&'static str, Vec<LexerRule>> = HashMap::new();
+        rulesets.insert(
+            "root",
+            vec![LexerRule {
+                pattern: r"[a-z]+",
+                kind: "ident",
+                keep: true,
+                modification: StateModification::None,
+            }],
+        );
+
+        match LazyStatefulLexer::new("one", rulesets, "missing") {
+            Err(LexerError::InvalidDefaultState { supplied_state, .. }) => {
+                assert_eq!(supplied_state, "missing");
+            }
+            Ok(_) => panic!("expected InvalidDefaultState, got Ok"),
+            Err(other) => panic!("expected InvalidDefaultState, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn push_to_unknown_ruleset_is_rejected() {
+        let root_rules = vec![LexerRule {
+            pattern: r"\[",
+            kind: "lbracket",
+            keep: true,
+            modification: StateModification::Push("inner"),
+        }];
+        let mut rulesets: HashMap<&'static str, Vec<LexerRule>> = HashMap::new();
+        rulesets.insert("root", root_rules);
+
+        match LazyStatefulLexer::new("[", rulesets, "root") {
+            Err(LexerError::InvalidRule { message }) => {
+                assert!(message.contains("tries to push"));
+            }
+            Ok(_) => panic!("expected InvalidRule, got Ok"),
+            Err(other) => panic!("expected InvalidRule, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn keep_false_rules_cannot_modify_state() {
+        let root_rules = vec![LexerRule {
+            pattern: r"\[",
+            kind: "lbracket",
+            keep: false,
+            modification: StateModification::Push("inner"),
+        }];
+        let mut rulesets: HashMap<&'static str, Vec<LexerRule>> = HashMap::new();
+        rulesets.insert("root", root_rules);
+        rulesets.insert(
+            "inner",
+            vec![LexerRule {
+                pattern: r"[0-9]+",
+                kind: "inner_number",
+                keep: true,
+                modification: StateModification::None,
+            }],
+        );
+
+        match LazyStatefulLexer::new("[", rulesets, "root") {
+            Err(LexerError::InvalidRule { message }) => {
+                assert!(message.contains("keep: false"));
+            }
+            Ok(_) => panic!("expected InvalidRule, got Ok"),
+            Err(other) => panic!("expected InvalidRule, got {:?}", other),
         }
     }
 }

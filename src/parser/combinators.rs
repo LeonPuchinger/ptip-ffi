@@ -125,6 +125,7 @@ mod tests {
                 input_cursor: self.cursor,
                 input_row: 0,
                 input_column: 0,
+                state: Vec::new(),
             }
         }
 
