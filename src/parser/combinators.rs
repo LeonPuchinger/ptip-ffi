@@ -14,7 +14,7 @@ pub fn optional<'a, R: 'a>(parser: Parser<'a, R>) -> Parser<'a, Option<R>> {
         match parser(lexer) {
             Ok(result) => Ok(Some(result)),
             Err(ParserError::UnexpectedToken { .. }) => {
-                lexer.restore(snapshot);
+                lexer.restore(&snapshot);
                 Ok(None)
             }
             Err(e) => Err(e),
