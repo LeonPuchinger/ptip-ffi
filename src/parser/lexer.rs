@@ -204,6 +204,14 @@ impl<'input> LazyStatefulLexer<'input> {
                                     ),
                                 });
                             }
+                        if !rule.keep && !matches!(rule.modification, StateModification::None) {
+                            return Err(LexerError::InvalidRule {
+                                message: format!(
+                                    "The rule with the pattern '{}' tries to modify the lexer state while being marked as 'keep: false', which is not allowed. Only rules that emit a token are allowed to modify the lexer state.",
+                                    rule.pattern
+                                ),
+                            });
+                        }
                         Ok(CompiledLexerRule {
                             pattern,
                             kind: rule.kind,
