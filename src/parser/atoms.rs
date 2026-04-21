@@ -11,7 +11,7 @@ pub fn token_kind<'a>(expected_kind: &'a str) -> Parser<'a, String> {
         if token.kind == expected_kind {
             Ok(token.text.to_string())
         } else {
-            lexer.restore(snapshot);
+            lexer.restore(&snapshot);
             Err(ParserError::UnexpectedToken {
                 expected: expected_kind.to_string(),
                 found: token.kind.to_string(),
@@ -30,7 +30,7 @@ pub fn exact<'a>(expected_text: &'a str) -> Parser<'a, String> {
             let token = match lexer.next() {
                 Ok(t) => t,
                 Err(LexerError::Eof) => {
-                    lexer.restore(snapshot);
+                    lexer.restore(&snapshot);
                     return Err(ParserError::UnexpectedEof);
                 }
                 Err(e) => return Err(e.into()),
@@ -47,7 +47,7 @@ pub fn exact<'a>(expected_text: &'a str) -> Parser<'a, String> {
                 break;
             }
         }
-        lexer.restore(snapshot);
+        lexer.restore(&snapshot);
         Err(ParserError::UnexpectedToken {
             expected: expected_text.to_string(),
             found: matched,

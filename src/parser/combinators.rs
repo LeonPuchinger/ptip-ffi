@@ -58,7 +58,7 @@ pub fn parse_at_anchors<'a, R: 'a>(
             {
                 let before_anchor = lexer.snapshot();
                 for parser in parsers {
-                    lexer.restore(before_anchor);
+                    lexer.restore(&before_anchor);
                     if let Ok(feature) = parser(lexer) {
                         features.push(feature);
                         // Assert whether the successful parser actually consumed any tokens
@@ -71,7 +71,7 @@ pub fn parse_at_anchors<'a, R: 'a>(
                         continue 'anchor;
                     }
                 }
-                lexer.restore(before_anchor);
+                lexer.restore(&before_anchor);
             }
             // No parser matched or the token is not an anchor.
             // In either case, the lexer needs to be advanced one token.
@@ -128,7 +128,7 @@ mod tests {
             }
         }
 
-        fn restore(&mut self, state: LexerState) -> Option<LexerError> {
+        fn restore(&mut self, state: &LexerState) -> Option<LexerError> {
             self.index = state.token_buffer_index;
             self.cursor = state.input_cursor;
             None

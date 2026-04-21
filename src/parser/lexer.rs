@@ -117,11 +117,11 @@ pub struct LexerState {
 pub trait Lexer<'a> {
     fn next(&mut self) -> Result<Token<'a>, LexerError>;
     fn snapshot(&self) -> LexerState;
-    fn restore(&mut self, state: LexerState) -> Option<LexerError>;
+    fn restore(&mut self, state: &LexerState) -> Option<LexerError>;
     fn peek(&mut self) -> Result<Token<'a>, LexerError> {
         let snapshot = self.snapshot();
         let next = self.next();
-        if let Some(e) = self.restore(snapshot) {
+        if let Some(e) = self.restore(&snapshot) {
             return Err(e);
         }
         next
@@ -401,7 +401,7 @@ impl<'input> Lexer<'input> for LazyStatefulLexer<'input> {
     }
 
     /// Restores the lexer's state to a previous snapshot created by `Lexer::snapshot`.
-    fn restore(&mut self, state: LexerState) -> Option<LexerError> {
+    fn restore(&mut self, state: &LexerState) -> Option<LexerError> {
         if state.token_buffer_index > self.token_buffer.len() {
             return Some(LexerError::InvalidSnapshot {
                 message: format!(
@@ -415,7 +415,7 @@ impl<'input> Lexer<'input> for LazyStatefulLexer<'input> {
         self.input_cursor = state.input_cursor;
         self.input_row = state.input_row;
         self.input_column = state.input_column;
-        self.state = state.state;
+        self.state = state.state.clone();
         None
     }
 }
