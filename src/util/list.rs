@@ -1,5 +1,6 @@
 use std::{cell::RefCell, collections::HashMap, rc::Rc};
 
+#[derive(Debug, PartialEq, Eq)]
 pub enum BranchedListError {
     CursorOutOfBounds,
     EmptyList { message: String },
@@ -184,4 +185,168 @@ struct BranchHead<'branch_keys, T> {
 struct Node<'branch_keys, T> {
     value: T,
     branches: HashMap<&'branch_keys str, BranchReference<'branch_keys, T>>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn empty_list_starts_empty() {
+        let list: BranchedList<'static, i32> = BranchedList::empty();
+        assert!(list.root_branch_empty());
+        assert_eq!(list.root_branch_size(), 0);
+        assert_eq!(list.get(0), None);
+    }
+
+    #[test]
+    fn with_value_starts_with_single_element() {
+        let list: BranchedList<'static, i32> = BranchedList::with_value(7);
+        assert!(!list.root_branch_empty());
+        assert_eq!(list.root_branch_size(), 1);
+        assert_eq!(list.get(0), Some(7));
+        assert_eq!(list.get(1), None);
+    }
+
+    #[test]
+    fn append_and_insert_modify_root_branch() {
+        let mut list: BranchedList<'static, i32> = BranchedList::empty();
+        list.append(1);
+        list.append(3);
+        assert_eq!(list.root_branch_size(), 2);
+        assert_eq!(list.get(0), Some(1));
+        assert_eq!(list.get(1), Some(3));
+
+        list.insert(2, 1).expect("insert at middle");
+        assert_eq!(list.root_branch_size(), 3);
+        assert_eq!(list.get(0), Some(1));
+        assert_eq!(list.get(1), Some(2));
+        assert_eq!(list.get(2), Some(3));
+
+        list.insert(0, 0).expect("insert at start");
+        assert_eq!(list.get(0), Some(0));
+        assert_eq!(list.get(1), Some(1));
+
+        list.insert(4, list.root_branch_size())
+            .expect("insert at end");
+        assert_eq!(list.get(list.root_branch_size() - 1), Some(4));
+    }
+
+    #[test]
+    fn insert_out_of_bounds_errors() {
+        let mut list: BranchedList<'static, i32> = BranchedList::with_value(1);
+        match list.insert(2, 3) {
+            Err(BranchedListError::CursorOutOfBounds) => {}
+            other => panic!("expected CursorOutOfBounds, got: {:?}", other),
+        }
+    }
+
+    #[test]
+    fn snapshot_shares_root_branch_contents() {
+        let mut list: BranchedList<'static, i32> = BranchedList::with_value(1);
+        let mut snapshot = list.snapshot();
+
+        snapshot.append(2);
+        assert_eq!(list.root_branch_size(), 2);
+        assert_eq!(list.get(1), Some(2));
+
+        list.append(3);
+        assert_eq!(snapshot.root_branch_size(), 3);
+        assert_eq!(snapshot.get(2), Some(3));
+    }
+
+    #[test]
+    fn branch_before_index_zero_works_on_empty_list_and_is_reused() {
+        let mut list: BranchedList<'static, i32> = BranchedList::empty();
+
+        let mut b1 = list
+            .branch_before_index("h", 0)
+            .expect("branch at gap 0");
+        assert_eq!(b1.root_branch_size(), 0);
+        b1.append(10);
+
+        let b2 = list
+            .branch_before_index("h", 0)
+            .expect("reuse same branch");
+        assert_eq!(b2.get(0), Some(10));
+        assert_eq!(b2.root_branch_size(), 1);
+
+        // Root branch remains unchanged.
+        assert_eq!(list.root_branch_size(), 0);
+    }
+
+    #[test]
+    fn branching_at_middle_and_end_gaps_creates_independent_paths() {
+        let mut list: BranchedList<'static, i32> = BranchedList::empty();
+        list.append(1);
+        list.append(2);
+        list.append(3);
+
+        // gap 1 = between 1 and 2
+        let mut middle = list
+            .branch_before_index("m", 1)
+            .expect("branch at middle gap");
+        middle.append(100);
+
+        // gap len = after last element
+        let mut end = list
+            .branch_before_index("e", list.root_branch_size())
+            .expect("branch at end gap");
+        end.append(200);
+
+        assert_eq!(middle.get(0), Some(100));
+        assert_eq!(end.get(0), Some(200));
+        assert_eq!(list.get(0), Some(1));
+        assert_eq!(list.get(1), Some(2));
+        assert_eq!(list.get(2), Some(3));
+    }
+
+    #[test]
+    fn branch_after_index_is_same_gap_as_branch_before_index_plus_one() {
+        let mut list: BranchedList<'static, i32> = BranchedList::empty();
+        list.append(1);
+        list.append(2);
+
+        let mut after_first = list
+            .branch_after_index("x", 0)
+            .expect("branch after index 0");
+        after_first.append(9);
+
+        // Same key and same gap via branch_before_index(1) should reuse.
+        let same = list
+            .branch_before_index("x", 1)
+            .expect("branch before index 1");
+        assert_eq!(same.get(0), Some(9));
+    }
+
+    #[test]
+    fn branch_bounds_are_enforced() {
+        let mut empty: BranchedList<'static, i32> = BranchedList::empty();
+        match empty.branch_before_index("k", 1) {
+            Err(BranchedListError::CursorOutOfBounds) => {}
+            _ => panic!("expected CursorOutOfBounds"),
+        }
+
+        let mut list: BranchedList<'static, i32> = BranchedList::with_value(1);
+        match list.branch_after_index("k", 1) {
+            Err(BranchedListError::CursorOutOfBounds) => {}
+            _ => panic!("expected CursorOutOfBounds"),
+        }
+    }
+
+    #[test]
+    fn branches_created_from_snapshot_are_visible_from_original() {
+        let mut list: BranchedList<'static, i32> = BranchedList::with_value(1);
+        let mut snap = list.snapshot();
+
+        let mut branch = snap
+            .branch_before_index("b", 0)
+            .expect("branch from snapshot");
+        branch.append(42);
+
+        let branch_from_original = list
+            .branch_before_index("b", 0)
+            .expect("branch from original");
+        assert_eq!(branch_from_original.get(0), Some(42));
+    }
 }
