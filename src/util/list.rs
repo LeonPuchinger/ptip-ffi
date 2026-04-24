@@ -16,6 +16,7 @@ type BranchReference<'branch_keys, T> = Rc<RefCell<BranchHead<'branch_keys, T>>>
 /// It should be noted that branching _on_ a node actually means the branching
 /// happens after the node. It is also possible to branch before the first node
 /// on a branch. In other words, branches are realized as gaps between nodes.
+#[derive(Clone)]
 pub struct BranchedList<'branch_keys, T> {
     root: BranchReference<'branch_keys, T>,
 }

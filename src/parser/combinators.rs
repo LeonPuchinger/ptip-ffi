@@ -119,17 +119,11 @@ mod tests {
             Ok(token)
         }
 
-        fn snapshot(&self) -> LexerState {
-            LexerState {
-                token_buffer_index: self.index,
-                input_cursor: self.cursor,
-                input_row: 0,
-                input_column: 0,
-                state: Vec::new(),
-            }
+        fn snapshot(&self) -> LexerState<'a> {
+            LexerState::new(self.index, self.cursor, 0, 0, Vec::new())
         }
 
-        fn restore(&mut self, state: &LexerState) -> Option<LexerError> {
+        fn restore(&mut self, state: &LexerState<'a>) -> Option<LexerError> {
             self.index = state.token_buffer_index;
             self.cursor = state.input_cursor;
             None

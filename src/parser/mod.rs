@@ -1,6 +1,6 @@
-pub mod atoms;
-pub mod combinators;
-pub mod lexer;
+pub(crate) mod atoms;
+pub(crate) mod combinators;
+pub(crate) mod lexer;
 
 use lexer::{Lexer, LexerError};
 
