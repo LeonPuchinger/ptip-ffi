@@ -121,6 +121,20 @@ struct TokenBufferEntry<'input> {
 /// A snapshot of the lexer's state, which can be used to restore the lexer to a
 /// previous position. The snapshot can be created using `Lexer::snapshot` and
 /// restored using `Lexer::restore`.
+///
+/// Technical implementation note: The snapshot type has to contain attributes
+/// for every possible implementation of the `Lexer` trait. Uncommon attributes
+/// that are only relevant for specific lexer implementations are wrapped in an
+/// `Option`. A much better solution to this problem would be to equip the `Lexer`
+/// trait with an associated `Snapshot` type, so each lexer implementation can
+/// define its own snapshot type. However, the associated type breaks dynamic
+/// polymorphism for the `Lexer` trait which is neccessary for this project,
+/// because language configs (which store the factories to build the lexers) are
+/// stored in a heterogeneous collection and thus require dynamic dispatch.
+/// Regrettably (for this project), Rust does not support value-dependent
+/// associated types, which would solve this issue by allowing dynamic polymorphism
+/// without having to lock in a specific snapshot type when expecting a trait object
+/// for the `Lexer` trait.
 #[derive(Clone)]
 pub struct LexerState<'input> {
     pub token_buffer_index: usize,
@@ -128,7 +142,8 @@ pub struct LexerState<'input> {
     pub input_row: usize,
     pub input_column: usize,
     pub state: Vec<&'static str>,
-    token_buffer: BranchedList<'static, TokenBufferEntry<'input>>,
+    /// An attribute specific to `LazyStatefulLexer`
+    stateful_token_buffer: Option<BranchedList<'static, TokenBufferEntry<'input>>>,
 }
 
 impl<'input> LexerState<'input> {
@@ -147,7 +162,7 @@ impl<'input> LexerState<'input> {
             input_row,
             input_column,
             state,
-            token_buffer: BranchedList::empty(),
+            stateful_token_buffer: None,
         }
     }
 }
@@ -295,7 +310,7 @@ impl<'input> LazyStatefulLexer<'input> {
 
     /// Pops the topmost ruleset from the lexer's stack. If the stack only contains one ruleset,
     /// this method returns an error, as the lexer must always have at least one ruleset to
-    /// operate on. When a ruleset is popped, the token buffer is also branched 
+    /// operate on. When a ruleset is popped, the token buffer is also branched
     /// at the current position with a special branch key so that if the lexer is
     /// later reset to a position before the pop, the pop can be undone by restoring
     /// the token buffer to the branch before the pop. Just like with `push_state`,
@@ -497,22 +512,34 @@ impl<'input> Lexer<'input> for LazyStatefulLexer<'input> {
             input_row: self.input_row,
             input_column: self.input_column,
             state: self.state.clone(),
-            token_buffer: self.token_buffer.clone(),
+            stateful_token_buffer: Some(self.token_buffer.clone()),
         }
     }
 
     /// Restores the lexer's state to a previous snapshot created by `Lexer::snapshot`.
     fn restore(&mut self, state: &LexerState<'input>) -> Option<LexerError> {
-        if state.token_buffer_index > state.token_buffer.root_branch_size() {
+        let token_buffer = match &state.stateful_token_buffer {
+            Some(token_buffer) => token_buffer,
+            None => {
+                return Some(LexerError::InvalidSnapshot {
+                    message: String::from(
+                        "Snapshot does not contain a token buffer; cannot restore LazyStatefulLexer.",
+                    ),
+                });
+            }
+        };
+
+        if state.token_buffer_index > token_buffer.root_branch_size() {
             return Some(LexerError::InvalidSnapshot {
                 message: format!(
                     "Invalid token buffer index: {} (buffer length: {})",
                     state.token_buffer_index,
-                    state.token_buffer.root_branch_size()
+                    token_buffer.root_branch_size()
                 ),
             });
         }
-        self.token_buffer = state.token_buffer.clone();
+
+        self.token_buffer = token_buffer.clone();
         self.token_buffer_root_index = state.token_buffer_index;
         self.input_cursor = state.input_cursor;
         self.input_row = state.input_row;
