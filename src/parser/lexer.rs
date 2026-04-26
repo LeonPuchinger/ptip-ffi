@@ -3,8 +3,6 @@ use std::{collections::HashMap, vec};
 
 use crate::util::list::BranchedList;
 
-const BRANCH_KEY_POP: &str = "__BRANCHED_LIST_POP__";
-
 #[derive(Clone, Debug)]
 pub struct TokenPosition {
     pub row_begin: usize,
@@ -215,12 +213,30 @@ pub struct LazyStatefulLexer<'input> {
     input_column: usize,
 }
 
+/// Lexer rulesets passed to the `LazyStatefulLexer` are not allowed to have
+/// names that start with this prefix.
+const RESERVED_RULESET_PREFIX: &str = "__BRANCHED_LIST_";
+/// Used as a branch key in the `BranchedList` on `LazyStatefulLexer` to mark
+/// branches that correspond to popping the lexer state.
+const BRANCH_KEY_POP: &str = "__BRANCHED_LIST_POP__";
+
 impl<'input> LazyStatefulLexer<'input> {
     pub fn new(
         input: &'input str,
         rulesets: HashMap<&'static str, LexerRuleset>,
         default: &'static str,
     ) -> Result<Self, LexerError> {
+        for &ruleset_name in rulesets.keys() {
+            if ruleset_name.starts_with(RESERVED_RULESET_PREFIX) {
+                return Err(LexerError::InvalidRule {
+                    message: format!(
+                        "The ruleset name '{}' is reserved for internal lexer branching.",
+                        ruleset_name
+                    ),
+                });
+            }
+        }
+
         if !rulesets.contains_key(default) {
             return Err(LexerError::InvalidDefaultState {
                 supplied_state: default,
@@ -285,6 +301,14 @@ impl<'input> LazyStatefulLexer<'input> {
     /// the push can be undone by restoring the token buffer to the branch before the push.
     /// This method can be used to to modify the lexer's state from a parser.
     pub fn push_state(&mut self, name: &'static str) -> Result<(), LexerError> {
+        if name.starts_with(RESERVED_RULESET_PREFIX) {
+            return Err(LexerError::InvalidState {
+                message: format!(
+                    "The lexer cannot push the reserved ruleset name '{}' onto the state stack.",
+                    name
+                ),
+            });
+        }
         if !self.rulesets.contains_key(name) {
             return Err(LexerError::InvalidState {
                 message: format!(
@@ -576,6 +600,30 @@ mod tests {
             "test setup: default ruleset must exist"
         );
         map
+    }
+
+    #[test]
+    fn reserved_ruleset_names_are_rejected() {
+        let rules = vec![LexerRule {
+            pattern: r"[a-z]+",
+            kind: "ident",
+            keep: true,
+            modification: StateModification::None,
+        }];
+
+        let rulesets =
+            rulesets_with_default("root", vec![("root", rules), (BRANCH_KEY_POP, Vec::new())]);
+
+        // Ensure the test setup actually contains a reserved ruleset name.
+        assert!(rulesets.contains_key(BRANCH_KEY_POP));
+
+        match LazyStatefulLexer::new("abc", rulesets, "root") {
+            Err(LexerError::InvalidRule { .. }) => {}
+            Ok(_) => panic!("expected InvalidRule for reserved ruleset name, got Ok"),
+            Err(_other) => {
+                panic!("expected InvalidRule for reserved ruleset name, got different error")
+            }
+        }
     }
 
     #[test]
