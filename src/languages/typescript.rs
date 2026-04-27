@@ -6,11 +6,13 @@ use crate::{
         Parser, ParserError,
         atoms::{exact, token_kind},
         combinators::{AnchorLocation, optional, parse_at_anchors},
-        lexer::{self, LazyStatefulLexer, Lexer, LexerRule, StateModification},
+        lexer::{LazyStatefulLexer, LexerRule, StateModification},
     },
 };
 
-fn function_parameter(lexer: &mut dyn Lexer) -> Result<FunctionParameter, ParserError> {
+fn function_parameter<'input>(
+    lexer: &mut LazyStatefulLexer<'input>,
+) -> Result<FunctionParameter, ParserError> {
     let parameter_name = token_kind("identifier")(lexer)?;
     let required = optional(exact("?"))(lexer)?.is_none();
     exact(":")(lexer)?;
@@ -25,10 +27,13 @@ fn function_parameter(lexer: &mut dyn Lexer) -> Result<FunctionParameter, Parser
     })
 }
 
-fn function_parameters(lexer: &mut dyn Lexer) -> Result<Vec<FunctionParameter>, ParserError> {
+fn function_parameters<'input>(
+    lexer: &mut LazyStatefulLexer<'input>,
+) -> Result<Vec<FunctionParameter>, ParserError> {
     let mut params = Vec::new();
+    lexer.push_state("parameters")?;
     loop {
-        match optional(Box::new(function_parameter))(lexer)? {
+        match optional(Box::new(|lexer| function_parameter(lexer)))(lexer)? {
             Some(param) => params.push(param),
             None => break,
         }
@@ -37,10 +42,13 @@ fn function_parameters(lexer: &mut dyn Lexer) -> Result<Vec<FunctionParameter>, 
             None => break,
         }
     }
+    lexer.pop_state()?;
     Ok(params)
 }
 
-fn keyworded_function_definition(lexer: &mut dyn Lexer) -> Result<LanguageFeature, ParserError> {
+fn keyworded_function_definition<'input>(
+    lexer: &mut LazyStatefulLexer<'input>,
+) -> Result<LanguageFeature, ParserError> {
     exact("function")(lexer)?;
     let name = token_kind("identifier")(lexer)?;
     exact("(")(lexer)?;
@@ -122,7 +130,7 @@ static STATEMENTS: &[LexerRule] = &[
         pattern: r"\{",
         kind: "open_brace",
         keep: true,
-        modification: StateModification::Push(BLOCK),
+        modification: StateModification::Push("block"),
     },
     LexerRule {
         pattern: r"[\[\]\.,;:<>=]",
@@ -132,6 +140,45 @@ static STATEMENTS: &[LexerRule] = &[
     },
     LexerRule {
         pattern: r#"[^\s\w$"'()/\[\]\.,;:<>=]+"#,
+        kind: "irrelevant",
+        keep: false,
+        modification: StateModification::None,
+    },
+];
+
+static FUNCTION_PARAMETERS: &[LexerRule] = &[
+    LexerRule {
+        pattern: r"[ \t\r\n]+",
+        kind: "whitespace",
+        keep: false,
+        modification: StateModification::None,
+    },
+    LexerRule {
+        pattern: r"[A-Za-z_$][A-Za-z0-9_$]*",
+        kind: "identifier",
+        keep: true,
+        modification: StateModification::None,
+    },
+    LexerRule {
+        pattern: r"\?|:",
+        kind: "parameter_syntax",
+        keep: true,
+        modification: StateModification::None,
+    },
+    LexerRule {
+        pattern: r",",
+        kind: "comma",
+        keep: true,
+        modification: StateModification::None,
+    },
+    LexerRule {
+        pattern: r"[\(\)]",
+        kind: "parenthesis",
+        keep: true,
+        modification: StateModification::None,
+    },
+    LexerRule {
+        pattern: r#"[^\s\w$?:,()]+"#,
         kind: "irrelevant",
         keep: false,
         modification: StateModification::None,
@@ -155,17 +202,25 @@ static BLOCK: &[LexerRule] = &[
     },
 ];
 
-pub fn register() -> LanguageConfig<'static> {
+pub fn register() -> LanguageConfig {
     LanguageConfig {
         name: "TypeScript",
-        build_lexer: |input| {
-            LazyStatefulLexer::new(input, STATEMENTS.to_vec())
-                .map(|lexer| Box::new(lexer) as Box<dyn lexer::Lexer>)
+        parse: |input| {
+            let mut lexer = LazyStatefulLexer::new(
+                input,
+                map! {
+                    "statements" => STATEMENTS.to_vec(),
+                    "parameters" => FUNCTION_PARAMETERS.to_vec(),
+                    "block" => BLOCK.to_vec(),
+                },
+                "statements",
+            )?;
+            let features = parse_at_anchors(map! {
+                AnchorLocation::Exact { token_kind: "keyword", text: "function" } => vec![
+                    Box::new(keyworded_function_definition) as Parser<LazyStatefulLexer<'_>, LanguageFeature>,
+                ]
+            })(&mut lexer)?;
+            Ok(features)
         },
-        parser: parse_at_anchors(map! {
-            AnchorLocation::Exact { token_kind: "keyword", text: "function" } => vec![
-                Box::new(keyworded_function_definition) as Parser<LanguageFeature>,
-            ]
-        }),
     }
 }

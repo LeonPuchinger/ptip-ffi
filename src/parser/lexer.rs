@@ -1,6 +1,8 @@
 use regex::Regex;
 use std::{collections::HashMap, vec};
 
+use crate::util::list::BranchedList;
+
 #[derive(Clone, Debug)]
 pub struct TokenPosition {
     pub row_begin: usize,
@@ -20,67 +22,59 @@ pub struct Token<'a> {
 /// rulesets when a rule is matched. This grants the lexer context-free
 /// capabilities, which is necessary for tokenizing complex languages.
 #[derive(Clone, Copy)]
-pub enum StateModification<'a> {
+pub enum StateModification {
     /// The lexer's stack remains unchanged.
     None,
     /// The top ruleset is popped from the lexer's stack. If the stack only
     /// contains one ruleset, this results in a `LexerError::InvalidState`.
     Pop,
-    /// Pushes a new ruleset onto the lexer's stack.
-    Push(&'a [LexerRule<'a>]),
-    /// Similar to `Push`, but the ruleset is not provided directly. Instead, a
-    /// factory function is provided that returns the ruleset when called. This
-    /// allows for defining cyclic rulesets, which is not possible with the
-    /// standard `Push` variant.
-    PushLazy(&'a (dyn Fn() -> &'a [LexerRule<'a>] + Send + Sync)),
+    /// Pushes a new ruleset onto the lexer's stack based on its name.
+    Push(&'static str),
 }
 
 /// A lexer rule defines which tokens are generated from the input. They also
 /// control the state of the lexer by allowing rulesets (states) to be pushed
 /// and popped from the lexer's internal stack.
 #[derive(Clone)]
-pub struct LexerRule<'a> {
+pub struct LexerRule {
     pub pattern: &'static str,
     pub kind: &'static str,
     pub keep: bool,
-    pub modification: StateModification<'a>,
-}
-
-/// After a ruleset of the lexer is compiled, it is stored in a shared arena.
-/// The `RulesetIndex` is a numeric index that is used to refer to the compiled
-/// ruleset in the arena.
-type RulesetIndex = usize;
-
-/// The compiled version of the state modification does not include a `PushLazy`
-/// variant because cyclic references, which are implemented using `PushLazy`,
-/// are resolved during compilation.
-#[derive(Clone)]
-enum CompiledStateModification {
-    None,
-    Pop,
-    Push { index: RulesetIndex },
+    pub modification: StateModification,
 }
 
 /// The lexer compiles regular `LexerRule`s into `CompiledLexerRule`s, which
 /// contain compiled regex patterns, for instance. The regular `LexerRule`s can
 /// be defined statically, while the compiled variants cannot. The compiled
-/// variants are stored in the lexer during runtime and used for tokenization.
+/// variants are stored in the lexer during runtime and are used for tokenization.
 #[derive(Clone)]
 struct CompiledLexerRule {
     pattern: Regex,
     kind: &'static str,
     keep: bool,
-    modification: CompiledStateModification,
+    modification: StateModification,
 }
 
 #[derive(Debug)]
 pub enum LexerError {
     NoMatch,
     Eof,
-    InvalidSnapshot { message: String },
-    InvalidState { message: String },
-    InvalidRule { message: String },
-    Custom { message: String },
+    InvalidSnapshot {
+        message: String,
+    },
+    InvalidState {
+        message: String,
+    },
+    InvalidRule {
+        message: String,
+    },
+    InvalidDefaultState {
+        supplied_state: &'static str,
+        message: String,
+    },
+    Custom {
+        message: String,
+    },
 }
 
 impl From<regex::Error> for LexerError {
@@ -108,110 +102,92 @@ impl From<regex::Error> for LexerError {
     }
 }
 
+/// When a token is emitted from the token buffer of the lexer, the lexer state
+/// needs to be updated to reflect that the token has been consumed. For instance,
+/// the input cursor needs to be moved forward by the length of the emitted
+/// token. This struct represents the necessary information to update the lexer
+/// state when a token is emitted from the token buffer alongside the token itself.
+#[derive(Clone)]
+struct TokenBufferEntry<'input> {
+    token: Token<'input>,
+    input_cursor_after: usize,
+    input_row_after: usize,
+    input_column_after: usize,
+    state_modification_after: StateModification,
+}
+
 /// A snapshot of the lexer's state, which can be used to restore the lexer to a
 /// previous position. The snapshot can be created using `Lexer::snapshot` and
 /// restored using `Lexer::restore`.
-#[derive(Copy, Clone)]
-pub struct LexerState {
+///
+/// Technical implementation note: The snapshot type has to contain attributes
+/// for every possible implementation of the `Lexer` trait. Uncommon attributes
+/// that are only relevant for specific lexer implementations are wrapped in an
+/// `Option`. A much better solution to this problem would be to equip the `Lexer`
+/// trait with an associated `Snapshot` type, so each lexer implementation can
+/// define its own snapshot type. However, the associated type breaks dynamic
+/// polymorphism for the `Lexer` trait which is neccessary for this project,
+/// because language configs (which store the factories to build the lexers) are
+/// stored in a heterogeneous collection and thus require dynamic dispatch.
+/// Regrettably (for this project), Rust does not support value-dependent
+/// associated types, which would solve this issue by allowing dynamic polymorphism
+/// without having to lock in a specific snapshot type when expecting a trait object
+/// for the `Lexer` trait.
+#[derive(Clone)]
+pub struct LexerState<'input> {
     pub token_buffer_index: usize,
     pub input_cursor: usize,
     pub input_row: usize,
     pub input_column: usize,
+    pub state: Vec<&'static str>,
+    /// An attribute specific to `LazyStatefulLexer`
+    stateful_token_buffer: Option<BranchedList<'static, TokenBufferEntry<'input>>>,
+}
+
+impl<'input> LexerState<'input> {
+    /// Utility constructor for lexer implementations that do not use the
+    /// internal token buffer.
+    pub fn new(
+        token_buffer_index: usize,
+        input_cursor: usize,
+        input_row: usize,
+        input_column: usize,
+        state: Vec<&'static str>,
+    ) -> Self {
+        Self {
+            token_buffer_index,
+            input_cursor,
+            input_row,
+            input_column,
+            state,
+            stateful_token_buffer: None,
+        }
+    }
 }
 
 // A pull-based lexer that allows its caller to save and restore its state
 // relative to the input sequence.
 pub trait Lexer<'a> {
     fn next(&mut self) -> Result<Token<'a>, LexerError>;
-    fn snapshot(&self) -> LexerState;
-    fn restore(&mut self, state: LexerState) -> Option<LexerError>;
+    fn snapshot(&self) -> LexerState<'a>;
+    fn restore(&mut self, state: &LexerState<'a>) -> Option<LexerError>;
     fn peek(&mut self) -> Result<Token<'a>, LexerError> {
         let snapshot = self.snapshot();
         let next = self.next();
-        if let Some(e) = self.restore(snapshot) {
+        if let Some(e) = self.restore(&snapshot) {
             return Err(e);
         }
         next
     }
 }
 
-/// A collection of compiled lexer rules. To match a token, the lexer only
+/// A collection of un-compiled lexer rules. To match a token, the lexer only
 /// ever looks at a single ruleset, which is the topmost one on the internal stack.
-type LexerRuleset = Vec<CompiledLexerRule>;
+type LexerRuleset = Vec<LexerRule>;
 
-/// A key that uniquely identifies a ruleset based on the pointer and length of
-/// the rules slice. This is used to keep track of already compiled rulesets and
-/// their indices, so that recursive and cyclic rulesets are compiled without
-/// getting into infinite loops.
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
-struct RulesetKey {
-    ptr: *const (),
-    len: usize,
-}
-
-impl RulesetKey {
-    fn from_rules(rules: &[LexerRule]) -> Self {
-        RulesetKey {
-            ptr: rules.as_ptr() as *const (),
-            len: rules.len(),
-        }
-    }
-}
-
-/// Used to keep track of already compiled rulesets and their indices, so that
-/// recursive and cyclic rulesets are compiled without getting into infinite loops.
-struct CompileContext {
-    rulesets: Vec<LexerRuleset>,
-    indices: HashMap<RulesetKey, usize>,
-}
-
-/// Compiles a ruleset and all of its nested rulesets into `CompiledLexerRule`s
-/// and stores them in the `CompileContext`. If the same ruleset is encountered
-/// repeatedly, the previously assigned index is returned, which
-/// allows for recursive and cyclic rulesets to be compiled creating an infinite
-/// recursion.
-fn compile_ruleset<'s, 'a>(
-    rules: &'s [LexerRule<'a>],
-    context: &mut CompileContext,
-) -> Result<RulesetIndex, LexerError> {
-    let key = RulesetKey::from_rules(rules);
-    // Check whether the ruleset is currently or has
-    // already been compiled and return its index if so.
-    if let Some(&index) = context.indices.get(&key) {
-        return Ok(index);
-    }
-    let index = context.rulesets.len();
-    context.indices.insert(key, index);
-    // Insert a placeholder to allow self/cyclic references
-    context.rulesets.push(Vec::new());
-    let compiled_rules = rules
-        .iter()
-        .map(|rule| {
-            let pattern = Regex::new(rule.pattern)?;
-            let modification = match rule.modification {
-                StateModification::None => CompiledStateModification::None,
-                StateModification::Pop => CompiledStateModification::Pop,
-                StateModification::Push(nested) => {
-                    let target = compile_ruleset(nested, context)?;
-                    CompiledStateModification::Push { index: target }
-                }
-                StateModification::PushLazy(factory) => {
-                    let nested = factory();
-                    let target = compile_ruleset(nested, context)?;
-                    CompiledStateModification::Push { index: target }
-                }
-            };
-            Ok(CompiledLexerRule {
-                pattern,
-                kind: rule.kind,
-                keep: rule.keep,
-                modification,
-            })
-        })
-        .collect::<Result<LexerRuleset, LexerError>>()?;
-    context.rulesets[index] = compiled_rules;
-    Ok(index)
-}
+/// Similar to `LexerRuleset`, but it stores `CompiledLexerRule`s
+/// which contain compiled regex patterns.
+type CompiledLexerRuleset = Vec<CompiledLexerRule>;
 
 /// A lexer that takes an input string and a set of rules and produces a stream
 /// of tokens. The lexer is pull-based and lazy, meaning that it only produces
@@ -228,33 +204,159 @@ fn compile_ruleset<'s, 'a>(
 /// (e.g. inside a string literal vs. outside of one).
 pub struct LazyStatefulLexer<'input> {
     input: &'input str,
-    rulesets: Vec<LexerRuleset>,
-    state: Vec<RulesetIndex>,
-    token_buffer: Vec<Token<'input>>,
-    token_buffer_index: usize,
+    rulesets: HashMap<&'static str, CompiledLexerRuleset>,
+    state: Vec<&'static str>,
+    token_buffer: BranchedList<'static, TokenBufferEntry<'input>>,
+    token_buffer_root_index: usize,
     input_cursor: usize,
     input_row: usize,
     input_column: usize,
 }
 
+/// Lexer rulesets passed to the `LazyStatefulLexer` are not allowed to have
+/// names that start with this prefix.
+const RESERVED_RULESET_PREFIX: &str = "__BRANCHED_LIST_";
+/// Used as a branch key in the `BranchedList` on `LazyStatefulLexer` to mark
+/// branches that correspond to popping the lexer state.
+const BRANCH_KEY_POP: &str = "__BRANCHED_LIST_POP__";
+
 impl<'input> LazyStatefulLexer<'input> {
-    pub fn new(input: &'input str, rules: Vec<LexerRule>) -> Result<Self, LexerError> {
-        let mut context = CompileContext {
-            rulesets: Vec::new(),
-            indices: HashMap::new(),
-        };
-        let root_index = compile_ruleset(&rules[..], &mut context)?;
-        let state = vec![root_index];
+    pub fn new(
+        input: &'input str,
+        rulesets: HashMap<&'static str, LexerRuleset>,
+        default: &'static str,
+    ) -> Result<Self, LexerError> {
+        for &ruleset_name in rulesets.keys() {
+            if ruleset_name.starts_with(RESERVED_RULESET_PREFIX) {
+                return Err(LexerError::InvalidRule {
+                    message: format!(
+                        "The ruleset name '{}' is reserved for internal lexer branching.",
+                        ruleset_name
+                    ),
+                });
+            }
+        }
+
+        if !rulesets.contains_key(default) {
+            return Err(LexerError::InvalidDefaultState {
+                supplied_state: default,
+                message: format!(
+                    "The default state '{}' could not be found in the provided rulesets.",
+                    default
+                ),
+            });
+        }
+        let compiled_rulesets = rulesets
+            .iter()
+            .map(|(&name, rules)| {
+                let compiled_rules = rules
+                    .iter()
+                    .map(|rule| {
+                        let pattern = Regex::new(rule.pattern)?;
+                        if let StateModification::Push(target) = rule.modification
+                            && !rulesets.contains_key(target) {
+                                return Err(LexerError::InvalidRule {
+                                    message: format!(
+                                        "The rule with the pattern '{}' tries to push the ruleset '{}' which is not defined in the provided rulesets.",
+                                        rule.pattern, target
+                                    ),
+                                });
+                            }
+                        if !rule.keep && !matches!(rule.modification, StateModification::None) {
+                            return Err(LexerError::InvalidRule {
+                                message: format!(
+                                    "The rule with the pattern '{}' tries to modify the lexer state while being marked as 'keep: false', which is not allowed. Only rules that emit a token are allowed to modify the lexer state.",
+                                    rule.pattern
+                                ),
+                            });
+                        }
+                        Ok(CompiledLexerRule {
+                            pattern,
+                            kind: rule.kind,
+                            keep: rule.keep,
+                            modification: rule.modification,
+                        })
+                    })
+                    .collect::<Result<CompiledLexerRuleset, LexerError>>()?;
+                Ok((name, compiled_rules))
+            })
+            .collect::<Result<HashMap<&'static str, CompiledLexerRuleset>, LexerError>>()?;
+        let state = vec![default];
         Ok(Self {
             input,
-            rulesets: context.rulesets,
+            rulesets: compiled_rulesets,
             state,
-            token_buffer: Vec::new(),
-            token_buffer_index: 0,
+            token_buffer: BranchedList::empty(),
+            token_buffer_root_index: 0,
             input_cursor: 0,
             input_row: 0,
             input_column: 0,
         })
+    }
+
+    /// Pushes a new ruleset onto the lexer's stack by its name. The ruleset must
+    /// exist in the lexer's collection of rulesets, otherwise an error is returned.
+    /// When a ruleset is pushed, the token buffer is also branched at the current
+    /// position so that if the lexer is later reset to a position before the push,
+    /// the push can be undone by restoring the token buffer to the branch before the push.
+    /// This method can be used to to modify the lexer's state from a parser.
+    pub fn push_state(&mut self, name: &'static str) -> Result<(), LexerError> {
+        if name.starts_with(RESERVED_RULESET_PREFIX) {
+            return Err(LexerError::InvalidState {
+                message: format!(
+                    "The lexer cannot push the reserved ruleset name '{}' onto the state stack.",
+                    name
+                ),
+            });
+        }
+        if !self.rulesets.contains_key(name) {
+            return Err(LexerError::InvalidState {
+                message: format!(
+                    "The lexer cannot push the unknown ruleset '{}' onto the state stack.",
+                    name
+                ),
+            });
+        }
+        let branch = self
+            .token_buffer
+            .branch_before_index(name, self.token_buffer_root_index)
+            .map_err(|e| LexerError::InvalidState {
+                message: format!(
+                    "Failed to branch token buffer while pushing state '{}': {:?}",
+                    name, e
+                ),
+            })?;
+        self.token_buffer = branch;
+        self.token_buffer_root_index = 0;
+        self.state.push(name);
+        Ok(())
+    }
+
+    /// Pops the topmost ruleset from the lexer's stack. If the stack only contains one ruleset,
+    /// this method returns an error, as the lexer must always have at least one ruleset to
+    /// operate on. When a ruleset is popped, the token buffer is also branched
+    /// at the current position with a special branch key so that if the lexer is
+    /// later reset to a position before the pop, the pop can be undone by restoring
+    /// the token buffer to the branch before the pop. Just like with `push_state`,
+    /// this method can be used to implement parser-driven lexing.
+    pub fn pop_state(&mut self) -> Result<(), LexerError> {
+        if self.state.len() <= 1 {
+            return Err(LexerError::InvalidState {
+                message: String::from(
+                    "The lexer state cannot be popped because it only contains one ruleset.",
+                ),
+            });
+        }
+        let branch = self
+            .token_buffer
+            .branch_before_index(BRANCH_KEY_POP, self.token_buffer_root_index)
+            .map_err(|e| LexerError::InvalidState {
+                message: format!("Failed to branch token buffer while popping state: {:?}", e),
+            })?;
+        self.token_buffer = branch;
+        self.token_buffer_root_index = 0;
+        self.state.pop();
+        Ok(())
     }
 }
 
@@ -265,11 +367,44 @@ impl<'input> Lexer<'input> for LazyStatefulLexer<'input> {
     /// longest match is chosen. If there are multiple matches of the same
     /// length, the one defined first in the rules is chosen.
     fn next(&mut self) -> Result<Token<'input>, LexerError> {
-        if self.token_buffer_index < self.token_buffer.len() {
+        if self.token_buffer_root_index < self.token_buffer.root_branch_size() {
             // Return the next token from the buffer if available
-            let token = &self.token_buffer[self.token_buffer_index];
-            self.token_buffer_index += 1;
-            Ok(token.clone())
+            let entry = self.token_buffer.get(self.token_buffer_root_index).ok_or(
+                LexerError::InvalidSnapshot {
+                    message: format!(
+                        "Invalid token buffer index: {} (buffer length: {})",
+                        self.token_buffer_root_index,
+                        self.token_buffer.root_branch_size()
+                    ),
+                },
+            )?;
+            self.token_buffer_root_index += 1;
+
+            // When replaying buffered tokens, we must also replay the lexer state
+            // transitions (cursor movement, line/column tracking, and state stack
+            // modification) so that subsequent lexing resumes from the correct
+            // position.
+            self.input_cursor = entry.input_cursor_after;
+            self.input_row = entry.input_row_after;
+            self.input_column = entry.input_column_after;
+            match entry.state_modification_after {
+                StateModification::None => {}
+                StateModification::Pop => {
+                    if self.state.len() <= 1 {
+                        return Err(LexerError::InvalidState {
+                            message: String::from(
+                                "The lexer state cannot be popped because it only contains one ruleset.",
+                            ),
+                        });
+                    }
+                    self.state.pop();
+                }
+                StateModification::Push(target_ruleset) => {
+                    self.state.push(target_ruleset);
+                }
+            }
+
+            Ok(entry.token.clone())
         } else {
             // Check whether the end of the input has been reached
             if self.input_cursor >= self.input.len() {
@@ -282,10 +417,9 @@ impl<'input> Lexer<'input> for LazyStatefulLexer<'input> {
             let mut best_length: usize = 0;
             let mut best_kind: Option<&str> = None;
             let mut best_keep: bool = true;
-            let mut best_modification: &CompiledStateModification =
-                &CompiledStateModification::None;
-            let current_ruleset_index = match self.state.last() {
-                Some(index) => *index,
+            let mut best_modification: &StateModification = &StateModification::None;
+            let current_ruleset_name = match self.state.last() {
+                Some(name) => *name,
                 None => {
                     return Err(LexerError::InvalidState {
                         message: String::from(
@@ -294,13 +428,13 @@ impl<'input> Lexer<'input> for LazyStatefulLexer<'input> {
                     });
                 }
             };
-            let current_ruleset = match self.rulesets.get(current_ruleset_index) {
+            let current_ruleset = match self.rulesets.get(current_ruleset_name) {
                 Some(ruleset) => ruleset,
                 None => {
                     return Err(LexerError::InvalidState {
                         message: format!(
-                            "The lexer refers to an unknown ruleset index: {}",
-                            current_ruleset_index
+                            "The lexer's internal state refers to an unknown ruleset: {}",
+                            current_ruleset_name
                         ),
                     });
                 }
@@ -348,8 +482,8 @@ impl<'input> Lexer<'input> for LazyStatefulLexer<'input> {
             self.input_row = row_end;
             self.input_column = column_end;
             match best_modification {
-                CompiledStateModification::None => {}
-                CompiledStateModification::Pop => {
+                StateModification::None => {}
+                StateModification::Pop => {
                     if self.state.len() <= 1 {
                         return Err(LexerError::InvalidState {
                             message: String::from(
@@ -359,10 +493,8 @@ impl<'input> Lexer<'input> for LazyStatefulLexer<'input> {
                     }
                     self.state.pop();
                 }
-                CompiledStateModification::Push {
-                    index: target_index,
-                } => {
-                    self.state.push(*target_index);
+                StateModification::Push(target_ruleset) => {
+                    self.state.push(target_ruleset);
                 }
             }
             if !best_keep {
@@ -382,8 +514,14 @@ impl<'input> Lexer<'input> for LazyStatefulLexer<'input> {
                 position,
             };
             // Modify the token buffer
-            self.token_buffer.push(new_token.clone());
-            self.token_buffer_index += 1;
+            self.token_buffer.append(TokenBufferEntry {
+                token: new_token.clone(),
+                input_cursor_after: self.input_cursor,
+                input_row_after: self.input_row,
+                input_column_after: self.input_column,
+                state_modification_after: *best_modification,
+            });
+            self.token_buffer_root_index += 1;
             Ok(new_token)
         }
     }
@@ -391,30 +529,46 @@ impl<'input> Lexer<'input> for LazyStatefulLexer<'input> {
     /// Creates a snapshot of the lexer's current state, which can be used to
     /// restore the lexer to this position later.
     /// The snapshot can be restored by calling `Lexer::restore`.
-    fn snapshot(&self) -> LexerState {
+    fn snapshot(&self) -> LexerState<'input> {
         LexerState {
-            token_buffer_index: self.token_buffer_index,
+            token_buffer_index: self.token_buffer_root_index,
             input_cursor: self.input_cursor,
             input_row: self.input_row,
             input_column: self.input_column,
+            state: self.state.clone(),
+            stateful_token_buffer: Some(self.token_buffer.clone()),
         }
     }
 
     /// Restores the lexer's state to a previous snapshot created by `Lexer::snapshot`.
-    fn restore(&mut self, state: LexerState) -> Option<LexerError> {
-        if state.token_buffer_index > self.token_buffer.len() {
+    fn restore(&mut self, state: &LexerState<'input>) -> Option<LexerError> {
+        let token_buffer = match &state.stateful_token_buffer {
+            Some(token_buffer) => token_buffer,
+            None => {
+                return Some(LexerError::InvalidSnapshot {
+                    message: String::from(
+                        "Snapshot does not contain a token buffer; cannot restore LazyStatefulLexer.",
+                    ),
+                });
+            }
+        };
+
+        if state.token_buffer_index > token_buffer.root_branch_size() {
             return Some(LexerError::InvalidSnapshot {
                 message: format!(
                     "Invalid token buffer index: {} (buffer length: {})",
                     state.token_buffer_index,
-                    self.token_buffer.len()
+                    token_buffer.root_branch_size()
                 ),
             });
         }
-        self.token_buffer_index = state.token_buffer_index;
+
+        self.token_buffer = token_buffer.clone();
+        self.token_buffer_root_index = state.token_buffer_index;
         self.input_cursor = state.input_cursor;
         self.input_row = state.input_row;
         self.input_column = state.input_column;
+        self.state = state.state.clone();
         None
     }
 }
@@ -422,6 +576,106 @@ impl<'input> Lexer<'input> for LazyStatefulLexer<'input> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::HashMap;
+
+    fn lexer_with_root_rules<'a>(
+        input: &'a str,
+        root_rules: Vec<LexerRule>,
+    ) -> LazyStatefulLexer<'a> {
+        let mut rulesets: HashMap<&'static str, Vec<LexerRule>> = HashMap::new();
+        rulesets.insert("root", root_rules);
+        LazyStatefulLexer::new(input, rulesets, "root").expect("lexer should build")
+    }
+
+    fn rulesets_with_default(
+        default: &'static str,
+        rulesets: Vec<(&'static str, Vec<LexerRule>)>,
+    ) -> HashMap<&'static str, Vec<LexerRule>> {
+        let mut map: HashMap<&'static str, Vec<LexerRule>> = HashMap::new();
+        for (name, rules) in rulesets {
+            map.insert(name, rules);
+        }
+        assert!(
+            map.contains_key(default),
+            "test setup: default ruleset must exist"
+        );
+        map
+    }
+
+    #[test]
+    fn reserved_ruleset_names_are_rejected() {
+        let rules = vec![LexerRule {
+            pattern: r"[a-z]+",
+            kind: "ident",
+            keep: true,
+            modification: StateModification::None,
+        }];
+
+        let rulesets =
+            rulesets_with_default("root", vec![("root", rules), (BRANCH_KEY_POP, Vec::new())]);
+
+        // Ensure the test setup actually contains a reserved ruleset name.
+        assert!(rulesets.contains_key(BRANCH_KEY_POP));
+
+        match LazyStatefulLexer::new("abc", rulesets, "root") {
+            Err(LexerError::InvalidRule { .. }) => {}
+            Ok(_) => panic!("expected InvalidRule for reserved ruleset name, got Ok"),
+            Err(_other) => {
+                panic!("expected InvalidRule for reserved ruleset name, got different error")
+            }
+        }
+    }
+
+    #[test]
+    fn parser_driven_push_state_changes_tokenization_and_is_reversible_via_restore() {
+        let root_rules = vec![LexerRule {
+            pattern: r"[a-z]+",
+            kind: "root_ident",
+            keep: true,
+            modification: StateModification::None,
+        }];
+
+        let inner_rules = vec![LexerRule {
+            pattern: r"[a-z]+",
+            kind: "inner_ident",
+            keep: true,
+            modification: StateModification::None,
+        }];
+
+        let rulesets =
+            rulesets_with_default("root", vec![("root", root_rules), ("inner", inner_rules)]);
+
+        let mut lexer =
+            LazyStatefulLexer::new("abc", rulesets, "root").expect("lexer should build");
+
+        let snapshot = lexer.snapshot();
+
+        lexer
+            .push_state("inner")
+            .expect("push_state should succeed");
+        let inner = lexer.next().expect("token in inner state");
+        assert_eq!(inner.kind, "inner_ident");
+
+        assert!(lexer.restore(&snapshot).is_none());
+        let root = lexer.next().expect("token in root state");
+        assert_eq!(root.kind, "root_ident");
+    }
+
+    #[test]
+    fn parser_driven_pop_state_errors_on_single_state() {
+        let rules = vec![LexerRule {
+            pattern: r"[a-z]+",
+            kind: "ident",
+            keep: true,
+            modification: StateModification::None,
+        }];
+
+        let mut lexer = lexer_with_root_rules("abc", rules);
+        match lexer.pop_state() {
+            Err(LexerError::InvalidState { .. }) => {}
+            other => panic!("expected InvalidState, got {:?}", other),
+        }
+    }
 
     #[test]
     fn lexes_identifiers_and_skips_whitespace() {
@@ -440,7 +694,7 @@ mod tests {
             },
         ];
 
-        let mut lexer = LazyStatefulLexer::new("foo bar", rules).expect("lexer should build");
+        let mut lexer = lexer_with_root_rules("foo bar", rules);
 
         let first = lexer.next().expect("first token");
         assert_eq!(first.kind, "ident");
@@ -473,7 +727,7 @@ mod tests {
             },
         ];
 
-        let mut lexer = LazyStatefulLexer::new("foobar", rules).expect("lexer should build");
+        let mut lexer = lexer_with_root_rules("foobar", rules);
         let token = lexer.next().expect("token");
         assert_eq!(token.kind, "foobar");
         assert_eq!(token.text, "foobar");
@@ -496,7 +750,7 @@ mod tests {
             },
         ];
 
-        let mut lexer = LazyStatefulLexer::new("ab", rules).expect("lexer should build");
+        let mut lexer = lexer_with_root_rules("ab", rules);
         let token = lexer.next().expect("token");
         assert_eq!(token.kind, "first");
         assert_eq!(token.text, "ab");
@@ -519,7 +773,7 @@ mod tests {
             },
         ];
 
-        let mut lexer = LazyStatefulLexer::new("one two", rules).expect("lexer should build");
+        let mut lexer = lexer_with_root_rules("one two", rules);
 
         let first = lexer.next().expect("first token");
         assert_eq!(first.text, "one");
@@ -530,7 +784,7 @@ mod tests {
         assert_eq!(second.text, "two");
 
         // Restore and read again; we should see the same second token.
-        assert!(lexer.restore(snapshot).is_none());
+        assert!(lexer.restore(&snapshot).is_none());
         let second_again = lexer.next().expect("second token after restore");
         assert_eq!(second_again.kind, second.kind);
         assert_eq!(second_again.text, second.text);
@@ -550,7 +804,7 @@ mod tests {
             modification: StateModification::None,
         }];
 
-        let mut lexer = LazyStatefulLexer::new("abc", rules).expect("lexer should build");
+        let mut lexer = lexer_with_root_rules("abc", rules);
 
         match lexer.next() {
             Err(LexerError::NoMatch) => {}
@@ -575,7 +829,7 @@ mod tests {
             },
         ];
 
-        let mut lexer = LazyStatefulLexer::new("\nabc", rules).expect("lexer should build");
+        let mut lexer = lexer_with_root_rules("\nabc", rules);
 
         // First token is whitespace with a newline, which is skipped.
         let token = lexer.next().expect("identifier after newline");
@@ -587,40 +841,48 @@ mod tests {
         assert_eq!(token.position.column_end, 3);
     }
 
-    static INNER_RULES: &[LexerRule] = &[LexerRule {
-        pattern: r"[0-9]+",
-        kind: "inner_number",
-        keep: true,
-        modification: StateModification::Pop,
-    }];
-
-    static ROOT_RULES: &[LexerRule] = &[
-        LexerRule {
-            pattern: r"\[",
-            kind: "lbracket",
-            keep: false,
-            modification: StateModification::Push(INNER_RULES),
-        },
-        LexerRule {
-            pattern: r"[0-9]+",
-            kind: "root_number",
-            keep: true,
-            modification: StateModification::None,
-        },
-        LexerRule {
-            pattern: r"\s+",
-            kind: "whitespace",
-            keep: false,
-            modification: StateModification::None,
-        },
-    ];
-
     #[test]
     fn push_and_pop_state_changes_ruleset() {
-        let mut lexer =
-            LazyStatefulLexer::new("[123 456", ROOT_RULES.to_vec()).expect("lexer should build");
+        let root_rules = vec![
+            LexerRule {
+                pattern: r"\[",
+                kind: "lbracket",
+                keep: true,
+                modification: StateModification::Push("inner"),
+            },
+            LexerRule {
+                pattern: r"[0-9]+",
+                kind: "root_number",
+                keep: true,
+                modification: StateModification::None,
+            },
+            LexerRule {
+                pattern: r"\s+",
+                kind: "whitespace",
+                keep: false,
+                modification: StateModification::None,
+            },
+        ];
 
-        // '[' pushes INNER_RULES and is discarded.
+        let inner_rules = vec![LexerRule {
+            pattern: r"[0-9]+",
+            kind: "inner_number",
+            keep: true,
+            modification: StateModification::Pop,
+        }];
+
+        let rulesets =
+            rulesets_with_default("root", vec![("root", root_rules), ("inner", inner_rules)]);
+
+        let mut lexer =
+            LazyStatefulLexer::new("[123 456", rulesets, "root").expect("lexer should build");
+
+        // '[' pushes the "inner" ruleset.
+        let bracket = lexer.next().expect("bracket token");
+        assert_eq!(bracket.kind, "lbracket");
+        assert_eq!(bracket.text, "[");
+
+        // In the "inner" ruleset, numbers are emitted as inner_number and pop back to root.
         let first = lexer.next().expect("inner number after bracket");
         assert_eq!(first.kind, "inner_number");
         assert_eq!(first.text, "123");
@@ -640,7 +902,7 @@ mod tests {
             modification: StateModification::Pop,
         }];
 
-        let mut lexer = LazyStatefulLexer::new("123", rules).expect("lexer should build");
+        let mut lexer = lexer_with_root_rules("123", rules);
 
         match lexer.next() {
             Err(LexerError::InvalidState { .. }) => {}
@@ -657,15 +919,86 @@ mod tests {
             modification: StateModification::None,
         }];
 
-        let mut lexer = LazyStatefulLexer::new("one", rules).expect("lexer should build");
+        let mut lexer = lexer_with_root_rules("one", rules);
 
         let mut snapshot = lexer.snapshot();
         // Corrupt the snapshot so that the token_buffer_index is out of range.
         snapshot.token_buffer_index = 10;
 
-        match lexer.restore(snapshot) {
+        match lexer.restore(&snapshot) {
             Some(LexerError::InvalidSnapshot { .. }) => {}
             other => panic!("expected InvalidSnapshot, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn invalid_default_state_is_reported() {
+        let mut rulesets: HashMap<&'static str, Vec<LexerRule>> = HashMap::new();
+        rulesets.insert(
+            "root",
+            vec![LexerRule {
+                pattern: r"[a-z]+",
+                kind: "ident",
+                keep: true,
+                modification: StateModification::None,
+            }],
+        );
+
+        match LazyStatefulLexer::new("one", rulesets, "missing") {
+            Err(LexerError::InvalidDefaultState { supplied_state, .. }) => {
+                assert_eq!(supplied_state, "missing");
+            }
+            Ok(_) => panic!("expected InvalidDefaultState, got Ok"),
+            Err(other) => panic!("expected InvalidDefaultState, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn push_to_unknown_ruleset_is_rejected() {
+        let root_rules = vec![LexerRule {
+            pattern: r"\[",
+            kind: "lbracket",
+            keep: true,
+            modification: StateModification::Push("inner"),
+        }];
+        let mut rulesets: HashMap<&'static str, Vec<LexerRule>> = HashMap::new();
+        rulesets.insert("root", root_rules);
+
+        match LazyStatefulLexer::new("[", rulesets, "root") {
+            Err(LexerError::InvalidRule { message }) => {
+                assert!(message.contains("tries to push"));
+            }
+            Ok(_) => panic!("expected InvalidRule, got Ok"),
+            Err(other) => panic!("expected InvalidRule, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn keep_false_rules_cannot_modify_state() {
+        let root_rules = vec![LexerRule {
+            pattern: r"\[",
+            kind: "lbracket",
+            keep: false,
+            modification: StateModification::Push("inner"),
+        }];
+        let mut rulesets: HashMap<&'static str, Vec<LexerRule>> = HashMap::new();
+        rulesets.insert("root", root_rules);
+        rulesets.insert(
+            "inner",
+            vec![LexerRule {
+                pattern: r"[0-9]+",
+                kind: "inner_number",
+                keep: true,
+                modification: StateModification::None,
+            }],
+        );
+
+        match LazyStatefulLexer::new("[", rulesets, "root") {
+            Err(LexerError::InvalidRule { message }) => {
+                assert!(message.contains("keep: false"));
+            }
+            Ok(_) => panic!("expected InvalidRule, got Ok"),
+            Err(other) => panic!("expected InvalidRule, got {:?}", other),
         }
     }
 }

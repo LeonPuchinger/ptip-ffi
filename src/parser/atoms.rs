@@ -4,14 +4,14 @@ use crate::parser::{
 };
 
 /// A parser that matches a token based on its kind.
-pub fn token_kind<'a>(expected_kind: &'a str) -> Parser<'a, String> {
-    Box::new(move |lexer: &mut dyn Lexer<'_>| {
+pub fn token_kind<'p, 'input, L: Lexer<'input>>(expected_kind: &'p str) -> Parser<'p, 'input, L, String> {
+    Box::new(move |lexer: &mut L| {
         let snapshot = lexer.snapshot();
         let token = lexer.next()?;
         if token.kind == expected_kind {
             Ok(token.text.to_string())
         } else {
-            lexer.restore(snapshot);
+            lexer.restore(&snapshot);
             Err(ParserError::UnexpectedToken {
                 expected: expected_kind.to_string(),
                 found: token.kind.to_string(),
@@ -22,15 +22,15 @@ pub fn token_kind<'a>(expected_kind: &'a str) -> Parser<'a, String> {
 
 /// A parser that matches a specific sequence of text from the input.
 /// It should be mentioned, however, that the expected text has to align with token boundaries.
-pub fn exact<'a>(expected_text: &'a str) -> Parser<'a, String> {
-    Box::new(move |lexer: &mut dyn Lexer<'_>| {
+pub fn exact<'p, 'input, L: Lexer<'input>>(expected_text: &'p str) -> Parser<'p, 'input, L, String> {
+    Box::new(move |lexer: &mut L| {
         let snapshot = lexer.snapshot();
         let mut matched = String::new();
         while matched.len() < expected_text.len() {
             let token = match lexer.next() {
                 Ok(t) => t,
                 Err(LexerError::Eof) => {
-                    lexer.restore(snapshot);
+                    lexer.restore(&snapshot);
                     return Err(ParserError::UnexpectedEof);
                 }
                 Err(e) => return Err(e.into()),
@@ -47,7 +47,7 @@ pub fn exact<'a>(expected_text: &'a str) -> Parser<'a, String> {
                 break;
             }
         }
-        lexer.restore(snapshot);
+        lexer.restore(&snapshot);
         Err(ParserError::UnexpectedToken {
             expected: expected_text.to_string(),
             found: matched,

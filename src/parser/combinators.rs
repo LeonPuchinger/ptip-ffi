@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use crate::parser::Parser;
 use crate::parser::lexer::LexerError;
 
@@ -8,13 +10,19 @@ use super::lexer::Lexer;
 /// succeeds, its result is wrapped in `Some`. If the nested parser encounters
 /// an unexpected token, returns `None` instead. Also, in the latter case,
 /// the input stream remains unchanged.
-pub fn optional<'a, R: 'a>(parser: Parser<'a, R>) -> Parser<'a, Option<R>> {
-    Box::new(move |lexer: &mut dyn Lexer<'_>| {
+pub fn optional<'p, 'input, L, R>(
+    parser: Parser<'p, 'input, L, R>,
+) -> Parser<'p, 'input, L, Option<R>>
+where
+    L: Lexer<'input> + 'p,
+    R: 'p,
+{
+    Box::new(move |lexer: &mut L| {
         let snapshot = lexer.snapshot();
         match parser(lexer) {
             Ok(result) => Ok(Some(result)),
             Err(ParserError::UnexpectedToken { .. }) => {
-                lexer.restore(snapshot);
+                lexer.restore(&snapshot);
                 Ok(None)
             }
             Err(e) => Err(e),
@@ -38,10 +46,15 @@ pub enum AnchorLocation<'a> {
 /// associated parsers are attempted. If a parser successfully matches, its result
 /// is added to the list of return values. If no parser matches or the token is
 /// not an anchor, the lexer advances by one token and continues searching.
-pub fn parse_at_anchors<'a, R: 'a>(
-    anchors: std::collections::HashMap<AnchorLocation<'a>, Vec<Parser<'a, R>>>,
-) -> Parser<'a, Vec<R>> {
-    Box::new(move |lexer: &mut dyn Lexer<'_>| {
+pub fn parse_at_anchors<'p, 'input, 'anchor, L, R>(
+    anchors: HashMap<AnchorLocation<'anchor>, Vec<Parser<'p, 'input, L, R>>>,
+) -> Parser<'p, 'input, L, Vec<R>>
+where
+    'anchor: 'p,
+    L: Lexer<'input> + ?Sized + 'p,
+    R: 'p,
+{
+    Box::new(move |lexer: &mut L| {
         let mut features = Vec::new();
         'anchor: loop {
             let next = match lexer.peek() {
@@ -58,10 +71,9 @@ pub fn parse_at_anchors<'a, R: 'a>(
             {
                 let before_anchor = lexer.snapshot();
                 for parser in parsers {
-                    lexer.restore(before_anchor);
+                    lexer.restore(&before_anchor);
                     if let Ok(feature) = parser(lexer) {
                         features.push(feature);
-                        // Assert whether the successful parser actually consumed any tokens
                         if lexer.snapshot().input_cursor == before_anchor.input_cursor {
                             return Err(ParserError::Custom(format!(
                                 "Parser for anchor {:?} did not consume any tokens",
@@ -71,10 +83,8 @@ pub fn parse_at_anchors<'a, R: 'a>(
                         continue 'anchor;
                     }
                 }
-                lexer.restore(before_anchor);
+                lexer.restore(&before_anchor);
             }
-            // No parser matched or the token is not an anchor.
-            // In either case, the lexer needs to be advanced one token.
             match lexer.next() {
                 Ok(_) => continue,
                 Err(LexerError::Eof) => break 'anchor,
@@ -119,16 +129,11 @@ mod tests {
             Ok(token)
         }
 
-        fn snapshot(&self) -> LexerState {
-            LexerState {
-                token_buffer_index: self.index,
-                input_cursor: self.cursor,
-                input_row: 0,
-                input_column: 0,
-            }
+        fn snapshot(&self) -> LexerState<'a> {
+            LexerState::new(self.index, self.cursor, 0, 0, Vec::new())
         }
 
-        fn restore(&mut self, state: LexerState) -> Option<LexerError> {
+        fn restore(&mut self, state: &LexerState<'a>) -> Option<LexerError> {
             self.index = state.token_buffer_index;
             self.cursor = state.input_cursor;
             None
@@ -171,7 +176,8 @@ mod tests {
     #[test]
     fn optional_propagates_non_unexpected_errors() {
         let mut lexer = TestLexer::new(vec![]);
-        let parser: Parser<'static, ()> = Box::new(|_| Err(ParserError::Custom("boom".into())));
+        let parser: Parser<'static, 'static, TestLexer<'static>, ()> =
+            Box::new(|_: &mut TestLexer<'static>| Err(ParserError::Custom("boom".into())));
         let opt = optional(parser);
 
         let err = opt(&mut lexer).unwrap_err();
@@ -183,14 +189,16 @@ mod tests {
 
     #[test]
     fn parse_at_anchors_collects_features_and_advances_stream() {
-        let mut anchors: HashMap<AnchorLocation<'static>, Vec<Parser<'static, String>>> =
-            HashMap::new();
+        let mut anchors: HashMap<
+            AnchorLocation<'static>,
+            Vec<Parser<'static, 'static, TestLexer<'static>, String>>,
+        > = HashMap::new();
         anchors.insert(
             AnchorLocation::Exact {
                 token_kind: "A",
                 text: "@",
             },
-            vec![Box::new(|lexer: &mut dyn Lexer<'_>| {
+            vec![Box::new(|lexer: &mut TestLexer<'static>| {
                 let t1 = lexer.next()?;
                 if t1.kind != "A" || t1.text != "@" {
                     return Err(ParserError::UnexpectedToken {
@@ -227,11 +235,13 @@ mod tests {
 
     #[test]
     fn parse_at_anchors_supports_kind_only_anchors() {
-        let mut anchors: HashMap<AnchorLocation<'static>, Vec<Parser<'static, String>>> =
-            HashMap::new();
+        let mut anchors: HashMap<
+            AnchorLocation<'static>,
+            Vec<Parser<'static, 'static, TestLexer<'static>, String>>,
+        > = HashMap::new();
         anchors.insert(
             AnchorLocation::Kind("A"),
-            vec![Box::new(|lexer: &mut dyn Lexer<'_>| {
+            vec![Box::new(|lexer: &mut TestLexer<'static>| {
                 let anchor = lexer.next()?;
                 if anchor.kind != "A" {
                     return Err(ParserError::UnexpectedToken {
@@ -268,12 +278,14 @@ mod tests {
 
     #[test]
     fn parse_at_anchors_prefers_exact_anchor_over_kind_anchor() {
-        let mut anchors: HashMap<AnchorLocation<'static>, Vec<Parser<'static, String>>> =
-            HashMap::new();
+        let mut anchors: HashMap<
+            AnchorLocation<'static>,
+            Vec<Parser<'static, 'static, TestLexer<'static>, String>>,
+        > = HashMap::new();
 
         anchors.insert(
             AnchorLocation::Kind("A"),
-            vec![Box::new(|lexer: &mut dyn Lexer<'_>| {
+            vec![Box::new(|lexer: &mut TestLexer<'static>| {
                 let anchor = lexer.next()?;
                 if anchor.kind != "A" {
                     return Err(ParserError::UnexpectedToken {
@@ -297,7 +309,7 @@ mod tests {
                 token_kind: "A",
                 text: "@",
             },
-            vec![Box::new(|lexer: &mut dyn Lexer<'_>| {
+            vec![Box::new(|lexer: &mut TestLexer<'static>| {
                 let anchor = lexer.next()?;
                 if anchor.kind != "A" || anchor.text != "@" {
                     return Err(ParserError::UnexpectedToken {
@@ -335,11 +347,13 @@ mod tests {
 
     #[test]
     fn parse_at_anchors_tries_parsers_in_order_and_restores_between_attempts() {
-        let mut anchors: HashMap<AnchorLocation<'static>, Vec<Parser<'static, &'static str>>> =
-            HashMap::new();
+        let mut anchors: HashMap<
+            AnchorLocation<'static>,
+            Vec<Parser<'static, 'static, TestLexer<'static>, &'static str>>,
+        > = HashMap::new();
 
-        let parser_consumes_then_fails: Parser<'static, &'static str> =
-            Box::new(|lexer: &mut dyn Lexer<'_>| {
+        let parser_consumes_then_fails: Parser<'static, 'static, TestLexer<'static>, &'static str> =
+            Box::new(|lexer: &mut TestLexer<'static>| {
                 // Consume the anchor token but fail without restoring.
                 let _ = lexer.next()?;
                 Err(ParserError::UnexpectedToken {
@@ -348,8 +362,8 @@ mod tests {
                 })
             });
 
-        let parser_succeeds: Parser<'static, &'static str> =
-            Box::new(|lexer: &mut dyn Lexer<'_>| {
+        let parser_succeeds: Parser<'static, 'static, TestLexer<'static>, &'static str> =
+            Box::new(|lexer: &mut TestLexer<'static>| {
                 let t = lexer.next()?;
                 if t.kind == "A" && t.text == "@" {
                     Ok("hit")
@@ -379,14 +393,16 @@ mod tests {
 
     #[test]
     fn parse_at_anchors_advances_by_one_when_anchor_parser_does_not_match() {
-        let mut anchors: HashMap<AnchorLocation<'static>, Vec<Parser<'static, String>>> =
-            HashMap::new();
+        let mut anchors: HashMap<
+            AnchorLocation<'static>,
+            Vec<Parser<'static, 'static, TestLexer<'static>, String>>,
+        > = HashMap::new();
         anchors.insert(
             AnchorLocation::Exact {
                 token_kind: "A",
                 text: "@",
             },
-            vec![Box::new(|lexer: &mut dyn Lexer<'_>| {
+            vec![Box::new(|lexer: &mut TestLexer<'static>| {
                 let t = lexer.next()?;
                 Err(ParserError::UnexpectedToken {
                     expected: "never".into(),
@@ -409,7 +425,7 @@ mod tests {
                 token_kind: "A",
                 text: "@",
             },
-            vec![Box::new(|lexer: &mut dyn Lexer<'_>| {
+            vec![Box::new(|lexer: &mut TestLexer<'static>| {
                 let t1 = lexer.next()?;
                 if t1.kind != "A" {
                     return Err(ParserError::UnexpectedToken {
@@ -438,14 +454,16 @@ mod tests {
 
     #[test]
     fn parse_at_anchors_errors_if_successful_parser_consumes_no_tokens() {
-        let mut anchors: HashMap<AnchorLocation<'static>, Vec<Parser<'static, ()>>> =
-            HashMap::new();
+        let mut anchors: HashMap<
+            AnchorLocation<'static>,
+            Vec<Parser<'static, 'static, TestLexer<'static>, ()>>,
+        > = HashMap::new();
         anchors.insert(
             AnchorLocation::Exact {
                 token_kind: "A",
                 text: "@",
             },
-            vec![Box::new(|_lexer: &mut dyn Lexer<'_>| Ok(()))],
+            vec![Box::new(|_lexer: &mut TestLexer<'static>| Ok(()))],
         );
 
         let mut lexer = TestLexer::new(vec![tok("A", "@"), tok("N", "tail")]);

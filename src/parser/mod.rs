@@ -1,6 +1,6 @@
-pub mod atoms;
-pub mod combinators;
-pub mod lexer;
+pub(crate) mod atoms;
+pub(crate) mod combinators;
+pub(crate) mod lexer;
 
 use lexer::{Lexer, LexerError};
 
@@ -23,9 +23,12 @@ impl From<LexerError> for ParserError {
             LexerError::InvalidSnapshot { message } => ParserError::InternalError(message),
             LexerError::InvalidState { message } => ParserError::InternalError(message),
             LexerError::InvalidRule { message } => ParserError::InternalError(message),
+            LexerError::InvalidDefaultState { message, .. } => ParserError::InternalError(message),
             LexerError::Custom { message } => ParserError::Custom(message),
         }
     }
 }
 
-pub type Parser<'p, R> = Box<dyn for<'a> Fn(&mut dyn Lexer<'a>) -> Result<R, ParserError> + 'p>;
+#[allow(type_alias_bounds)]
+pub type Parser<'parser, 'input, L: Lexer<'input>, R> =
+    Box<dyn Fn(&mut L) -> Result<R, ParserError> + 'parser>;

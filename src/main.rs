@@ -1,7 +1,7 @@
 use ptip_ffi::{generate, initialize};
 
 const EXAMPLE_TS_INPUT: &str = r#"
-function greet() {
+function greet(a: string) {
     console.log("Hello, world!");
 }
 "#;
@@ -12,5 +12,6 @@ fn main() {
         println!("Language found: {}", lang.name);
     }
 
-    let _ = generate(EXAMPLE_TS_INPUT, "TypeScript", "Python", &registry);
+    // TypeScript is the only language currently supported, so we use it for both input and output.
+    let _ = generate(EXAMPLE_TS_INPUT, "TypeScript", "TypeScript", &registry);
 }

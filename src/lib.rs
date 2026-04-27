@@ -7,7 +7,7 @@ mod languages;
 mod parser;
 mod util;
 
-pub fn initialize() -> Vec<LanguageConfig<'static>> {
+pub fn initialize() -> Vec<LanguageConfig> {
     languages::register_languages()
 }
 
@@ -25,7 +25,6 @@ pub fn generate(
         .iter()
         .find(|config| config.name == output_language)
         .ok_or(PTIPFFIError::LanguageNotFound(output_language.into()))?;
-    let mut lexer = (input_config.build_lexer)(input)?;
-    let _features = (input_config.parser)(&mut *lexer)?;
+    let _features = (input_config.parse)(input)?;
     Ok(())
 }
