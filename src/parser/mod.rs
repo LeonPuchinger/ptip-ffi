@@ -29,4 +29,6 @@ impl From<LexerError> for ParserError {
     }
 }
 
-pub type Parser<'p, R> = Box<dyn for<'a> Fn(&mut dyn Lexer<'a>) -> Result<R, ParserError> + 'p>;
+#[allow(type_alias_bounds)]
+pub type Parser<'parser, 'input, L: Lexer<'input>, R> =
+    Box<dyn Fn(&mut L) -> Result<R, ParserError> + 'parser>;

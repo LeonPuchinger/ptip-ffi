@@ -6,11 +6,13 @@ use crate::{
         Parser, ParserError,
         atoms::{exact, token_kind},
         combinators::{AnchorLocation, optional, parse_at_anchors},
-        lexer::{LazyStatefulLexer, Lexer, LexerRule, StateModification},
+        lexer::{LazyStatefulLexer, LexerRule, StateModification},
     },
 };
 
-fn function_parameter(lexer: &mut dyn Lexer) -> Result<FunctionParameter, ParserError> {
+fn function_parameter<'input>(
+    lexer: &mut LazyStatefulLexer<'input>,
+) -> Result<FunctionParameter, ParserError> {
     let parameter_name = token_kind("identifier")(lexer)?;
     let required = optional(exact("?"))(lexer)?.is_none();
     exact(":")(lexer)?;
@@ -25,10 +27,12 @@ fn function_parameter(lexer: &mut dyn Lexer) -> Result<FunctionParameter, Parser
     })
 }
 
-fn function_parameters(lexer: &mut dyn Lexer) -> Result<Vec<FunctionParameter>, ParserError> {
+fn function_parameters<'input>(
+    lexer: &mut LazyStatefulLexer<'input>,
+) -> Result<Vec<FunctionParameter>, ParserError> {
     let mut params = Vec::new();
     loop {
-        match optional(Box::new(function_parameter))(lexer)? {
+        match optional(Box::new(|lexer| function_parameter(lexer)))(lexer)? {
             Some(param) => params.push(param),
             None => break,
         }
@@ -40,7 +44,9 @@ fn function_parameters(lexer: &mut dyn Lexer) -> Result<Vec<FunctionParameter>, 
     Ok(params)
 }
 
-fn keyworded_function_definition(lexer: &mut dyn Lexer) -> Result<LanguageFeature, ParserError> {
+fn keyworded_function_definition<'input>(
+    lexer: &mut LazyStatefulLexer<'input>,
+) -> Result<LanguageFeature, ParserError> {
     exact("function")(lexer)?;
     let name = token_kind("identifier")(lexer)?;
     exact("(")(lexer)?;
@@ -169,7 +175,7 @@ pub fn register() -> LanguageConfig {
             )?;
             let features = parse_at_anchors(map! {
                 AnchorLocation::Exact { token_kind: "keyword", text: "function" } => vec![
-                    Box::new(keyworded_function_definition) as Parser<LanguageFeature>,
+                    Box::new(keyworded_function_definition) as Parser<LazyStatefulLexer<'_>, LanguageFeature>,
                 ]
             })(&mut lexer)?;
             Ok(features)
