@@ -6,7 +6,7 @@ use crate::{
         Parser, ParserError,
         atoms::{exact, token_kind},
         combinators::{AnchorLocation, optional, parse_at_anchors},
-        lexer::{self, LazyStatefulLexer, Lexer, LexerRule, StateModification},
+        lexer::{LazyStatefulLexer, Lexer, LexerRule, StateModification},
     },
 };
 
