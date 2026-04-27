@@ -31,6 +31,7 @@ fn function_parameters<'input>(
     lexer: &mut LazyStatefulLexer<'input>,
 ) -> Result<Vec<FunctionParameter>, ParserError> {
     let mut params = Vec::new();
+    lexer.push_state("parameters")?;
     loop {
         match optional(Box::new(|lexer| function_parameter(lexer)))(lexer)? {
             Some(param) => params.push(param),
@@ -41,6 +42,7 @@ fn function_parameters<'input>(
             None => break,
         }
     }
+    lexer.pop_state()?;
     Ok(params)
 }
 
@@ -144,6 +146,45 @@ static STATEMENTS: &[LexerRule] = &[
     },
 ];
 
+static FUNCTION_PARAMETERS: &[LexerRule] = &[
+    LexerRule {
+        pattern: r"[ \t\r\n]+",
+        kind: "whitespace",
+        keep: false,
+        modification: StateModification::None,
+    },
+    LexerRule {
+        pattern: r"[A-Za-z_$][A-Za-z0-9_$]*",
+        kind: "identifier",
+        keep: true,
+        modification: StateModification::None,
+    },
+    LexerRule {
+        pattern: r"\?|:",
+        kind: "parameter_syntax",
+        keep: true,
+        modification: StateModification::None,
+    },
+    LexerRule {
+        pattern: r",",
+        kind: "comma",
+        keep: true,
+        modification: StateModification::None,
+    },
+    LexerRule {
+        pattern: r"[\(\)]",
+        kind: "parenthesis",
+        keep: true,
+        modification: StateModification::None,
+    },
+    LexerRule {
+        pattern: r#"[^\s\w$?:,()]+"#,
+        kind: "irrelevant",
+        keep: false,
+        modification: StateModification::None,
+    },
+];
+
 // Inside a block (e.g. function body), everything is treated as body content
 // and discarded by the lexer until the matching closing curly brace is found.
 static BLOCK: &[LexerRule] = &[
@@ -169,6 +210,7 @@ pub fn register() -> LanguageConfig {
                 input,
                 map! {
                     "statements" => STATEMENTS.to_vec(),
+                    "parameters" => FUNCTION_PARAMETERS.to_vec(),
                     "block" => BLOCK.to_vec(),
                 },
                 "statements",
