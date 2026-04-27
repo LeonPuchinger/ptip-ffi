@@ -155,24 +155,24 @@ static BLOCK: &[LexerRule] = &[
     },
 ];
 
-pub fn register() -> LanguageConfig<'static> {
+pub fn register() -> LanguageConfig {
     LanguageConfig {
         name: "TypeScript",
-        build_lexer: |input| {
-            LazyStatefulLexer::new(
+        parse: |input| {
+            let mut lexer = LazyStatefulLexer::new(
                 input,
                 map! {
                     "statements" => STATEMENTS.to_vec(),
                     "block" => BLOCK.to_vec(),
                 },
                 "statements",
-            )
-            .map(|lexer| Box::new(lexer) as Box<dyn lexer::Lexer>)
+            )?;
+            let features = parse_at_anchors(map! {
+                AnchorLocation::Exact { token_kind: "keyword", text: "function" } => vec![
+                    Box::new(keyworded_function_definition) as Parser<LanguageFeature>,
+                ]
+            })(&mut lexer)?;
+            Ok(features)
         },
-        parser: parse_at_anchors(map! {
-            AnchorLocation::Exact { token_kind: "keyword", text: "function" } => vec![
-                Box::new(keyworded_function_definition) as Parser<LanguageFeature>,
-            ]
-        }),
     }
 }

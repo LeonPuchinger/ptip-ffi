@@ -1,13 +1,6 @@
-use crate::{
-    features::LanguageFeature,
-    parser::{
-        Parser,
-        lexer::{Lexer, LexerError},
-    },
-};
+use crate::{features::LanguageFeature, parser::ParserError};
 
-pub struct LanguageConfig<'p> {
+pub struct LanguageConfig {
     pub name: &'static str,
-    pub build_lexer: for<'a> fn(&'a str) -> Result<Box<dyn Lexer<'a> + 'a>, LexerError>,
-    pub parser: Parser<'p, Vec<LanguageFeature>>,
+    pub parse: for<'a> fn(&'a str) -> Result<Vec<LanguageFeature>, ParserError>,
 }
