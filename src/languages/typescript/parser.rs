@@ -1,5 +1,4 @@
 use crate::{
-    config::LanguageConfig,
     features::{FunctionParameter, LanguageFeature, Type},
     map,
     parser::{
@@ -202,25 +201,20 @@ static BLOCK: &[LexerRule] = &[
     },
 ];
 
-pub fn register() -> LanguageConfig {
-    LanguageConfig {
-        name: "TypeScript",
-        parse: |input| {
-            let mut lexer = LazyStatefulLexer::new(
-                input,
-                map! {
-                    "statements" => STATEMENTS.to_vec(),
-                    "parameters" => FUNCTION_PARAMETERS.to_vec(),
-                    "block" => BLOCK.to_vec(),
-                },
-                "statements",
-            )?;
-            let features = parse_at_anchors(map! {
-                AnchorLocation::Exact { token_kind: "keyword", text: "function" } => vec![
-                    Box::new(keyworded_function_definition) as Parser<LazyStatefulLexer<'_>, LanguageFeature>,
-                ]
-            })(&mut lexer)?;
-            Ok(features)
-        },
-    }
+pub fn parse(input: &str) -> Result<Vec<LanguageFeature>, ParserError> {
+    let mut lexer = LazyStatefulLexer::new(
+        input,
+        map! {
+        "statements" => STATEMENTS.to_vec(),
+        "parameters" => FUNCTION_PARAMETERS.to_vec(),
+                "block" => BLOCK.to_vec(),
+            },
+        "statements",
+    )?;
+    let features = parse_at_anchors(map! {
+        AnchorLocation::Exact { token_kind: "keyword", text: "function" } => vec![
+            Box::new(keyworded_function_definition) as Parser<LazyStatefulLexer<'_>, LanguageFeature>,
+        ]
+    })(&mut lexer)?;
+    Ok(features)
 }
