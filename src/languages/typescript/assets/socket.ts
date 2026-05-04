@@ -298,6 +298,8 @@ function concat(a: Bytes, b: Bytes): Bytes {
   return out;
 }
 
+
+
 // -------- entry point for testing --------
 
 /*
@@ -306,6 +308,8 @@ How to use:
 2. In another terminal, run `socket.ts` in "client" mode: `deno run --allow-net socket.ts client` or `node socket.ts client`.
 3. Observe the server logs the received messages and the client logs the echoed responses.
 */
+
+/*
 
 const mode = getMode();
 if (mode === "server") {
@@ -384,3 +388,5 @@ async function runClient() {
 
   socket.close();
 }
+
+*/
