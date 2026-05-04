@@ -1,0 +1,386 @@
+type Bytes = Uint8Array<ArrayBufferLike>;
+
+function runtimeEnvironment(): "node" | "deno" | "unknown" {
+  if (typeof Deno !== "undefined" && Deno?.version?.deno) {
+    return "deno";
+  }
+
+  if (typeof process !== "undefined" && process?.versions?.node) {
+    return "node";
+  }
+
+  return "unknown";
+}
+
+/**
+ * An abstraction over a byte stream that can be used for communication over a socket or similar transport.
+ * The `read` method reads data into the provided buffer, returning the number of bytes read, or `null` on EOF.
+ * The `write` method writes data from the provided buffer, returning the number of bytes written.
+ * The `close` method closes the stream and releases any resources associated with it.
+ */
+export interface Stream {
+  read(buffer: Bytes): Promise<number | null>;
+  write(buffer: Bytes): Promise<number>;
+  close(): void;
+}
+
+/**
+ * A wrapper around `Deno.Conn` for use with Deno.
+ */
+class DenoConnection implements Stream {
+  private connection: Deno.Conn;
+
+  constructor(connection: Deno.Conn) {
+    this.connection = connection;
+  }
+
+  read(buffer: Bytes): Promise<number | null> {
+    return this.connection.read(buffer);
+  }
+
+  write(buffer: Bytes): Promise<number> {
+    return this.connection.write(buffer);
+  }
+
+  close() {
+    this.connection.close();
+  }
+}
+
+import { Buffer } from "node:buffer";
+import net from "node:net";
+
+/**
+ * A wrapper around `net.Socket` for use with Node.js.
+ */
+export class NodeStream implements Stream {
+  private readonly socket: net.Socket;
+  private ended = false;
+  private pendingRead: Promise<number | null> | null = null;
+
+  constructor(socket: net.Socket) {
+    this.socket = socket;
+    // Start paused: only read when someone calls `read()`.
+    this.socket.pause();
+
+    const markEnded = () => {
+      this.ended = true;
+    };
+
+    // Track EOF even if no read is currently pending.
+    this.socket.on("end", markEnded);
+    this.socket.on("close", markEnded);
+  }
+
+  read(buffer: Bytes): Promise<number | null> {
+    // Optional safety: disallow concurrent reads (the rest of the code assumes 0 or 1 pending read).
+    if (this.pendingRead) {
+      throw new Error("Concurrent read() calls are not supported");
+    }
+    if (this.ended) return Promise.resolve(null);
+    this.pendingRead = new Promise<number | null>((resolve) => {
+      let settled = false;
+      const cleanup = () => {
+        if (settled) return;
+        settled = true;
+        this.socket.removeListener("data", onData);
+        this.socket.removeListener("end", onEnd);
+        this.socket.removeListener("close", onClose);
+        // Backpressure lives in the socket: pause whenever no read is actively waiting.
+        this.socket.pause();
+        this.pendingRead = null;
+      };
+
+      const onData = (chunk: Buffer) => {
+        cleanup();
+        const n = Math.min(buffer.length, chunk.length);
+        buffer.set(chunk.subarray(0, n));
+        // Preserve remaining bytes for the next read.
+        if (n < chunk.length) {
+          const head = chunk.subarray(0, n);
+          buffer.set(new Uint8Array(head));
+          if (n < chunk.length) {
+            const rest = chunk.subarray(n);
+            this.socket.unshift(new Uint8Array(rest));
+          }
+        }
+        resolve(n);
+      };
+
+      const onEnd = () => {
+        this.ended = true;
+        cleanup();
+        resolve(null);
+      };
+
+      const onClose = () => {
+        this.ended = true;
+        cleanup();
+        resolve(null);
+      };
+
+      this.socket.once("data", onData);
+      this.socket.once("end", onEnd);
+      this.socket.once("close", onClose);
+      // Allow the socket to emit exactly one chunk (or EOF) for this read.
+      this.socket.resume();
+    });
+    return this.pendingRead;
+  }
+
+  write(buffer: Bytes): Promise<number> {
+    return new Promise((resolve, reject) => {
+      this.socket.write(buffer, (err) => {
+        if (err) reject(err);
+        else resolve(buffer.length);
+      });
+    });
+  }
+
+  close(): void {
+    this.socket.destroy();
+  }
+}
+
+/**
+ * Connects to a unix domain socket at the given path, returning a `Stream` for communication.
+ * The caller is responsible for cleaning up the socket file when done.
+ * Note: this function is not designed to be used concurrently from multiple processes, and does not
+ * implement any locking around the socket file.
+ * TLDR: Intended for use in a client process that connects to a server.
+ */
+export async function connectUnix(path: string): Promise<Stream> {
+  const env = runtimeEnvironment();
+  if (env === "deno") {
+    const conn = await Deno.connect({ transport: "unix", path });
+    return new DenoConnection(conn);
+  }
+  if (env === "node") {
+    const net = await import("node:net");
+    return new Promise((resolve, reject) => {
+      const socket = net.createConnection(path, () => {
+        resolve(new NodeStream(socket));
+      });
+      socket.on("error", reject);
+    });
+  }
+  throw new Error("Runtime environment not supported");
+}
+
+/**
+ * Listens for incoming connections on a unix domain socket at the given path, yielding a `Stream`
+ * for each connection. The socket is created if it doesn't exist, and removed if it already exists.
+ * The caller is responsible for cleaning up the socket file when done.
+ * Note: this function is not designed to be used concurrently from multiple processes, and does not
+ * implement any locking around the socket file.
+ * TLDR: Intended for use in a server process that accepts connections from clients.
+ */
+export async function* listenUnix(path: string): AsyncIterable<Stream> {
+  const environment = runtimeEnvironment();
+  if (environment === "deno") {
+    try {
+      await Deno.remove(path);
+    } catch {}
+    const listener = Deno.listen({ transport: "unix", path });
+    for await (const conn of listener) {
+      yield new DenoConnection(conn);
+    }
+    return;
+  }
+  if (environment === "node") {
+    const net = await import("node:net");
+    const fs = await import("node:fs");
+    try {
+      fs.unlinkSync(path);
+    } catch {}
+    const server = net.createServer();
+    server.listen(path);
+    const queue: Stream[] = [];
+    let resolve: ((c: Stream) => void) | null = null;
+    server.on("connection", (socket) => {
+      const connection = new NodeStream(socket);
+      if (resolve) {
+        resolve(connection);
+        resolve = null;
+      } else {
+        queue.push(connection);
+      }
+    });
+    while (true) {
+      if (queue.length > 0) {
+        yield queue.shift()!;
+      } else {
+        const conn = await new Promise<Stream>((res) => {
+          resolve = res;
+        });
+        yield conn;
+      }
+    }
+  }
+  throw new Error("Runtime environment not supported");
+}
+
+/**
+ * A socket that can send and receive length-prefixed messages (netstrings) over a `Stream`,
+ * such as a unix domain socket, implemented by `DenoConnection` or `NodeStream` for example.
+ */
+export class MessageSocket {
+  private buffer: Bytes = new Uint8Array(0);
+  private decoder = new TextDecoder();
+  private encoder = new TextEncoder();
+  private stream: Stream;
+
+  constructor(conn: Stream) {
+    this.stream = conn;
+  }
+
+  async send(data: Bytes) {
+    const header = this.encoder.encode(String(data.length) + ":");
+    const trailer = this.encoder.encode(",");
+    await this.stream.write(header);
+    await this.stream.write(data);
+    await this.stream.write(trailer);
+  }
+
+  async sendText(text: string) {
+    await this.send(this.encoder.encode(text));
+  }
+
+  async receive(): Promise<Bytes | null> {
+    while (true) {
+      const msg = this.tryParse();
+      if (msg) return msg;
+      const chunk = new Uint8Array(1024);
+      const n = await this.stream.read(chunk);
+      if (n === null) return null;
+      this.buffer = concat(this.buffer, chunk.subarray(0, n));
+    }
+  }
+
+  async receiveText(): Promise<string | null> {
+    const msg = await this.receive();
+    return msg ? this.decoder.decode(msg) : null;
+  }
+
+  private tryParse(): Bytes | null {
+    let colon = -1;
+    for (let i = 0; i < this.buffer.length; i++) {
+      const c = this.buffer[i];
+      if (c === 58) {
+        colon = i;
+        break;
+      }
+      if (c < 48 || c > 57) throw new Error("Invalid netstring");
+    }
+    if (colon === -1) return null;
+    const len = Number(this.decoder.decode(this.buffer.slice(0, colon)));
+    const total = colon + 1 + len + 1;
+    if (this.buffer.length < total) return null;
+    const dataStart = colon + 1;
+    const dataEnd = dataStart + len;
+    if (this.buffer[dataEnd] !== 44) {
+      throw new Error("Invalid netstring (missing comma)");
+    }
+    const msg = this.buffer.slice(dataStart, dataEnd);
+    this.buffer = this.buffer.slice(total);
+    return msg;
+  }
+
+  close() {
+    this.stream.close();
+  }
+}
+
+function concat(a: Bytes, b: Bytes): Bytes {
+  const out = new Uint8Array(a.length + b.length);
+  out.set(a);
+  out.set(b, a.length);
+  return out;
+}
+
+// -------- entry point for testing --------
+
+/*
+How to use:
+1. Run `socket.ts` in "server" mode: `deno run --allow-net socket.ts server` or `node socket.ts server`.
+2. In another terminal, run `socket.ts` in "client" mode: `deno run --allow-net socket.ts client` or `node socket.ts client`.
+3. Observe the server logs the received messages and the client logs the echoed responses.
+*/
+
+const mode = getMode();
+if (mode === "server") {
+  runServer();
+} else if (mode === "client") {
+  runClient();
+} else {
+  console.error('Usage: main.ts "server" | "client"');
+  Deno.exit?.(1);
+  process?.exit?.(1);
+}
+
+// -------- helpers --------
+
+function getMode(): "server" | "client" | "unknown" {
+  // Deno
+  if (typeof Deno !== "undefined") {
+    return (Deno.args[0] as any) ?? "unknown";
+  }
+
+  // Node
+  if (typeof process !== "undefined") {
+    return (process.argv[2] as any) ?? "unknown";
+  }
+
+  return "unknown";
+}
+
+// -------- server --------
+
+async function runServer() {
+  const path = "/tmp/test.sock";
+  console.log("Starting server on", path);
+
+  for await (const conn of listenUnix(path)) {
+    handle(conn);
+  }
+}
+
+async function handle(conn: any) {
+  const socket = new MessageSocket(conn);
+
+  console.log("Client connected");
+
+  try {
+    while (true) {
+      const msg = await socket.receiveText();
+      if (msg === null) break;
+
+      console.log("Received:", msg);
+
+      await socket.sendText("Echo: " + msg);
+    }
+  } catch (err) {
+    console.error("Connection error:", err);
+  } finally {
+    socket.close();
+    console.log("Client disconnected");
+  }
+}
+
+// -------- client --------
+
+async function runClient() {
+  const path = "/tmp/test.sock";
+  console.log("Connecting to", path);
+
+  const conn = await connectUnix(path);
+  const socket = new MessageSocket(conn);
+
+  await socket.sendText("hello");
+  console.log(await socket.receiveText());
+
+  await socket.sendText("world");
+  console.log(await socket.receiveText());
+
+  socket.close();
+}
