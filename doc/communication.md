@@ -1,12 +1,12 @@
 # Communication
 
 Both sides of the FFI need to communicate over a shared channel to exchange data and instructions.
-This document outlines a text-based communication protocol for this exact use case.
+This document outlines a text-based communication protocol for this exact use case, called the _bridge_ protocol.
 Should the text-based nature of the protocol turn out to bottleneck the FFI or produce excessive overhead, it needs to be replaced by a more efficient binary-based protocol in the future.
 
 ## Medium
 
-This protocol is message-based and therefore has to be carried over any message/datagram-based medium.
+The bridge protocol is message-based and therefore has to be carried over any message/datagram-based medium.
 To carry the messages over a streaming socket, for instance, a layer/shim needs to be introduced that allows bounded messages to be exchanged.
 The medium has to support UTF-8 encoding, as that is what the messages are kept in.
 
@@ -227,7 +227,7 @@ Additional characters, such as `"\r"` are not allowed.
 
 ## Versioning
 
-This is Version 1 of the protocol.
+This is Version 1 of the bridge protocol.
 The messages themselves do not need to be versioned, however.
 This is due to the fact that the FFI tool makes sure that only implementations of the same protocol version are communicating with each other via codegen.
 

@@ -5,11 +5,11 @@ import {
 } from "jsr:@std/assert@1.0.19";
 import {
     CallMessage,
-    Communication,
+    Bridge,
     ErrorMessage,
     RequestMessage,
     SendMessage,
-} from "../communication.ts";
+} from "../bridge.ts";
 import { MessageSocket } from "../socket.ts";
 import { MemoryDuplexStream } from "./stream.ts";
 
@@ -23,10 +23,10 @@ function deferred<T>() {
     return { promise, resolve, reject };
 }
 
-Deno.test("Communication: CallMessage roundtrip (positional + named)", async () => {
+Deno.test("Bridge: CallMessage roundtrip (positional + named)", async () => {
     const [a, b] = MemoryDuplexStream.pair();
-    const commA = new Communication(new MessageSocket(a));
-    const commB = new Communication(new MessageSocket(b));
+    const commA = new Bridge(new MessageSocket(a));
+    const commB = new Bridge(new MessageSocket(b));
 
     const got = deferred<CallMessage>();
     commB.onCall((m) => got.resolve(m));
@@ -73,10 +73,10 @@ Deno.test("Communication: CallMessage roundtrip (positional + named)", async () 
     await runB;
 });
 
-Deno.test("Communication: Request/Send/Error message roundtrips", async () => {
+Deno.test("Bridge: Request/Send/Error message roundtrips", async () => {
     const [a, b] = MemoryDuplexStream.pair();
-    const commA = new Communication(new MessageSocket(a));
-    const commB = new Communication(new MessageSocket(b));
+    const commA = new Bridge(new MessageSocket(a));
+    const commB = new Bridge(new MessageSocket(b));
 
     const gotRequest = deferred<RequestMessage>();
     const gotSend = deferred<SendMessage>();
@@ -124,10 +124,10 @@ Deno.test("Communication: Request/Send/Error message roundtrips", async () => {
     await runB;
 });
 
-Deno.test("Communication: handler errors are non-fatal", async () => {
+Deno.test("Bridge: handler errors are non-fatal", async () => {
     const [a, b] = MemoryDuplexStream.pair();
-    const commA = new Communication(new MessageSocket(a));
-    const commB = new Communication(new MessageSocket(b));
+    const commA = new Bridge(new MessageSocket(a));
+    const commB = new Bridge(new MessageSocket(b));
 
     const originalConsoleError = console.error;
     console.error = () => {};
@@ -156,9 +156,9 @@ Deno.test("Communication: handler errors are non-fatal", async () => {
     }
 });
 
-Deno.test("Communication: run() is not re-entrant", async () => {
+Deno.test("Bridge: run() is not re-entrant", async () => {
     const [a, b] = MemoryDuplexStream.pair();
-    const commB = new Communication(new MessageSocket(b));
+    const commB = new Bridge(new MessageSocket(b));
     const run1 = commB.run();
 
     await assertRejects(
@@ -172,10 +172,10 @@ Deno.test("Communication: run() is not re-entrant", async () => {
     await run1;
 });
 
-Deno.test("Communication: invalid message kind rejects run() and allows restart", async () => {
+Deno.test("Bridge: invalid message kind rejects run() and allows restart", async () => {
     const [a, b] = MemoryDuplexStream.pair();
     const sockA = new MessageSocket(a);
-    const commB = new Communication(new MessageSocket(b));
+    const commB = new Bridge(new MessageSocket(b));
 
     const run1 = commB.run();
     await sockA.sendText("X");
@@ -187,7 +187,7 @@ Deno.test("Communication: invalid message kind rejects run() and allows restart"
     await run2;
 });
 
-Deno.test("Communication: serialize() rejects CR/LF in fields", () => {
+Deno.test("Bridge: serialize() rejects CR/LF in fields", () => {
     assertThrows(
         () => {
             // invocationPath is checked for CR/LF.

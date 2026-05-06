@@ -1,5 +1,5 @@
 /*
-Protocol layer for the FFI communication protocol described in `doc/communication.md`.
+Protocol layer for the bridge protocol described in `doc/communication.md`.
 
 This module sits on top of a `MessageSocket` transport that exchanges UTF-8 text
 messages (already framed as netstrings in `socket.ts`).
@@ -116,7 +116,7 @@ export class ErrorMessage implements Message {
     }
 }
 
-export class Communication {
+export class Bridge {
     private readonly socket: MessageSocket;
 
     private readonly callHandlers = new Set<
@@ -170,7 +170,7 @@ export class Communication {
      */
     async run(): Promise<void> {
         if (this.active) {
-            throw new Error("Communication.run() is already running");
+            throw new Error("Bridge.run() is already running");
         }
         this.active = true;
         try {
