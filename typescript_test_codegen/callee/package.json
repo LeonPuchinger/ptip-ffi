@@ -1,0 +1,12 @@
+{
+  "name": "@typescript_test_codegen/callee",
+  "description": "Imagining what the output of ptip-ffi codegen could look like",
+  "version": "0.0.1",
+  "main": "main.ts",
+  "devDependencies": {
+
+  },
+  "dependencies": {
+    "synchronous-socket": "0.0.2"
+  }
+}
