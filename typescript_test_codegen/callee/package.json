@@ -7,6 +7,6 @@
 
   },
   "dependencies": {
-    "synchronous-socket": "0.0.2"
+    "synchronous-socket": "github:leonpuchinger/synchronous-socket#feat-read-wo-waiting-for-eot"
   }
 }

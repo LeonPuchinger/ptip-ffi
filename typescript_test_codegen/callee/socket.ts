@@ -1,3 +1,4 @@
+import { default as NativeSynchronousSocket } from "synchronous-socket";
 import { runtimeEnvironment } from "./util.ts";
 
 type Bytes = Uint8Array<ArrayBufferLike>;
@@ -12,6 +13,46 @@ export interface Stream {
   read(buffer: Bytes): Promise<number | null>;
   write(buffer: Bytes): Promise<number>;
   close(): void;
+}
+
+/**
+ * An abstraction over a synchronous byte stream that can be used for communication over a socket or similar transport.
+ * The `read` method reads data into the provided buffer, returning the number of bytes read, or `null` on EOF.
+ * The `write` method writes data from the provided buffer, returning the number of bytes written.
+ * The `close` method closes the stream and releases any resources associated with it.
+ */
+export interface SynchronousStream {
+  read(buffer: Bytes): number | null;
+  write(buffer: Bytes): number;
+  close(): void;
+}
+
+/**
+ * A wrapper around `synchronous-socket`, making it conform to the `SynchronousStream` interface.
+ */
+export class SynchronousSocket implements SynchronousStream {
+  private socket: typeof NativeSynchronousSocket
+
+  constructor(path: string) {
+    this.socket = new NativeSynchronousSocket(path);
+    this.socket.connect();
+  }
+
+  read(buffer: Bytes): number | null {
+    const bytesRead = this.socket.readIntoBuffer(buffer);
+    if (bytesRead === null || bytesRead === 0) {
+      return null;
+    }
+    return bytesRead;
+  }
+
+  write(buffer: Bytes): number {
+    return this.socket.writeFromBuffer(buffer);
+  }
+
+  close(): void {
+    this.socket.close();
+  }
 }
 
 /**
