@@ -282,37 +282,37 @@ export class MessageSocket {
   private buffer: Bytes = new Uint8Array(0);
   private decoder = new TextDecoder();
   private encoder = new TextEncoder();
-  private stream: Stream;
+  private stream: SynchronousStream;
 
-  constructor(conn: Stream) {
+  constructor(conn: SynchronousStream) {
     this.stream = conn;
   }
 
-  async send(data: Bytes) {
+  send(data: Bytes) {
     const header = this.encoder.encode(String(data.length) + ":");
     const trailer = this.encoder.encode(",");
-    await this.stream.write(header);
-    await this.stream.write(data);
-    await this.stream.write(trailer);
+    this.stream.write(header);
+    this.stream.write(data);
+    this.stream.write(trailer);
   }
 
-  async sendText(text: string) {
-    await this.send(this.encoder.encode(text));
+  sendText(text: string) {
+    this.send(this.encoder.encode(text));
   }
 
-  async receive(): Promise<Bytes | null> {
+  receive(): Bytes | null {
     while (true) {
       const msg = this.tryParse();
       if (msg) return msg;
       const chunk = new Uint8Array(1024);
-      const n = await this.stream.read(chunk);
+      const n = this.stream.read(chunk);
       if (n === null) return null;
       this.buffer = concat(this.buffer, chunk.subarray(0, n));
     }
   }
 
-  async receiveText(): Promise<string | null> {
-    const msg = await this.receive();
+  receiveText(): string | null {
+    const msg = this.receive();
     return msg ? this.decoder.decode(msg) : null;
   }
 
