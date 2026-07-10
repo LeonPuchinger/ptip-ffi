@@ -1,8 +1,8 @@
-function trim_whitespace(str: string): string {
+export function trim_whitespace(str: string): string {
     return str.trim();
 }
 
-class Point {
+export class Point {
     x: number;
     y: number;
 
@@ -16,6 +16,6 @@ class Point {
     }
 }
 
-function takes_point(point: Point): number {
+export function takes_point(point: Point): number {
     return point.distance_to_origin();
 }
