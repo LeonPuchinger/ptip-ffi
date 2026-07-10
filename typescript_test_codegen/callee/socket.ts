@@ -1,4 +1,4 @@
-import { default as NativeSynchronousSocket } from "synchronous-socket";
+import { SynchronousSocket as NativeSynchronousSocket, SynchronousSocketServer as NativeSynchronousSocketServer } from "synchronous-socket";
 import { runtimeEnvironment } from "./util.ts";
 
 type Bytes = Uint8Array<ArrayBufferLike>;
@@ -31,11 +31,16 @@ export interface SynchronousStream {
  * A wrapper around `synchronous-socket`, making it conform to the `SynchronousStream` interface.
  */
 export class SynchronousSocket implements SynchronousStream {
-  private socket: typeof NativeSynchronousSocket
+  private socket: NativeSynchronousSocket
 
-  constructor(path: string) {
-    this.socket = new NativeSynchronousSocket(path);
-    this.socket.connect();
+  constructor(socket: NativeSynchronousSocket) {
+    this.socket = socket;
+  }
+
+  static fromPath(path: string) {
+    const socket = new NativeSynchronousSocket(path);
+    socket.connect();
+    return new SynchronousSocket(socket);
   }
 
   read(buffer: Bytes): number | null {
@@ -51,7 +56,25 @@ export class SynchronousSocket implements SynchronousStream {
   }
 
   close(): void {
-    this.socket.close();
+    this.socket.disconnect();
+  }
+}
+
+export class SynchronousSocketServer {
+  private server: NativeSynchronousSocketServer;
+
+  constructor(path: string) {
+    this.server = new NativeSynchronousSocketServer(path);
+    this.server.listen();
+  }
+
+  accept(): SynchronousSocket {
+    const socket = this.server.accept();
+    return new SynchronousSocket(socket);
+  }
+
+  close(): void {
+    this.server.close();
   }
 }
 
