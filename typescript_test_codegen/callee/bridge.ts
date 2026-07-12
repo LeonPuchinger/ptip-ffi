@@ -9,8 +9,16 @@ import type { MessageSocket } from "./socket.ts";
 
 export type UUID = string;
 
+export type MessageHandler = {
+  call?: (message: CallMessage) => void;
+  request?: (message: RequestMessage) => void;
+  send?: (message: SendMessage) => void;
+  error?: (message: ErrorMessage) => void;
+};
+
 export interface Message {
   serialize(): string;
+  match(handlers: MessageHandler): void;
 }
 
 export type ParameterKind =
@@ -60,6 +68,12 @@ export class CallMessage implements Message {
     }
     return lines.join("\n");
   }
+
+  match(handlers: MessageHandler): void {
+    if (handlers.call) {
+      handlers.call(this);
+    }
+  }
 }
 
 export class RequestMessage implements Message {
@@ -82,6 +96,12 @@ export class RequestMessage implements Message {
       this.valueSink,
     ].join("\n");
   }
+
+  match(handlers: MessageHandler): void {
+    if (handlers.request) {
+      handlers.request(this);
+    }
+  }
 }
 
 export class SendMessage implements Message {
@@ -98,6 +118,12 @@ export class SendMessage implements Message {
       "\n",
     );
   }
+
+  match(handlers: MessageHandler): void {
+    if (handlers.send) {
+      handlers.send(this);
+    }
+  }
 }
 
 export class ErrorMessage implements Message {
@@ -113,6 +139,12 @@ export class ErrorMessage implements Message {
     return ["E", this.reference, encodeParameterLine(this.error)].join(
       "\n",
     );
+  }
+
+  match(handlers: MessageHandler): void {
+    if (handlers.error) {
+      handlers.error(this);
+    }
   }
 }
 
