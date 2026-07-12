@@ -149,118 +149,21 @@ export class ErrorMessage implements Message {
 }
 
 export class Bridge {
-  private readonly socket: MessageSocket;
+  constructor(private readonly socket: MessageSocket) { }
 
-  private readonly callHandlers = new Set<
-    (m: CallMessage) => void | Promise<void>
-  >();
-  private readonly requestHandlers = new Set<
-    (m: RequestMessage) => void | Promise<void>
-  >();
-  private readonly sendHandlers = new Set<
-    (m: SendMessage) => void | Promise<void>
-  >();
-  private readonly errorHandlers = new Set<
-    (m: ErrorMessage) => void | Promise<void>
-  >();
-
-  private active = false;
-
-  constructor(socket: MessageSocket) {
-    this.socket = socket;
+  send(message: Message): void {
+    return this.socket.sendText(message.serialize());
   }
 
-  onCall(handler: (m: CallMessage) => void | Promise<void>): () => void {
-    this.callHandlers.add(handler);
-    return () => this.callHandlers.delete(handler);
-  }
-
-  onRequest(
-    handler: (m: RequestMessage) => void | Promise<void>,
-  ): () => void {
-    this.requestHandlers.add(handler);
-    return () => this.requestHandlers.delete(handler);
-  }
-
-  onSend(handler: (m: SendMessage) => void | Promise<void>): () => void {
-    this.sendHandlers.add(handler);
-    return () => this.sendHandlers.delete(handler);
-  }
-
-  onError(handler: (m: ErrorMessage) => void | Promise<void>): () => void {
-    this.errorHandlers.add(handler);
-    return () => this.errorHandlers.delete(handler);
-  }
-
-  async send(message: Message): Promise<void> {
-    await this.socket.sendText(message.serialize());
-  }
-
-  /**
-   * Starts accepting incoming messages from the socket and dispatching them
-   * to subscribers. To stop accepting messages, invoke `close()`.
-   */
-  async run(): Promise<void> {
-    if (this.active) {
-      throw new Error("Bridge.run() is already running");
-    }
-    this.active = true;
-    try {
-      while (true) {
-        const text = await this.socket.receiveText();
-        if (text === null) return;
-        const parsed = parseWireMessage(text);
-        await this.dispatch(parsed);
-      }
-    } finally {
-      this.active = false;
-    }
+  nextMessage(): Message | null {
+    const text = this.socket.receiveText();
+    if (text === null) return null;
+    const parsed = parseWireMessage(text);
+    return parsed;
   }
 
   close(): void {
     this.socket.close();
-  }
-
-  /**
-   * Delivers incoming parsed messages to subscribers.
-   */
-  private async dispatch(message: Message): Promise<void> {
-    if (message instanceof CallMessage) {
-      await invokeHandlers(this.callHandlers, message, "CallMessage");
-      return;
-    }
-    if (message instanceof RequestMessage) {
-      await invokeHandlers(
-        this.requestHandlers,
-        message,
-        "RequestMessage",
-      );
-      return;
-    }
-    if (message instanceof SendMessage) {
-      await invokeHandlers(this.sendHandlers, message, "SendMessage");
-      return;
-    }
-    if (message instanceof ErrorMessage) {
-      await invokeHandlers(this.errorHandlers, message, "ErrorMessage");
-      return;
-    }
-    throw new Error("Unknown message instance");
-  }
-}
-
-async function invokeHandlers<T>(
-  handlers: Set<(m: T) => void | Promise<void>>,
-  message: T,
-  label: string,
-): Promise<void> {
-  for (const handler of handlers) {
-    try {
-      await handler(message);
-    } catch (err) {
-      // Handler errors are not fatal by design.
-      console.error(`${label} handler error:`, err);
-    }
   }
 }
 
