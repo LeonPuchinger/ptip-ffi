@@ -1,4 +1,5 @@
 import { Bridge } from "./bridge.ts";
+import { dispatchMessage } from "./dispatch.ts";
 import { MessageSocket, SynchronousSocketServer } from "./socket.ts";
 
 const path = "/tmp/test_ptip_ffi.sock";
@@ -18,6 +19,11 @@ while (true) {
     const datagramSocket = new MessageSocket(streamSocket);
     const bridge = new Bridge(datagramSocket);
     advertiseSocket();
-    bridge.run();
-    // TODO: hook up dispatch
+    while (true) {
+        const message = bridge.nextMessage();
+        if (message === null) {
+            break;
+        }
+        dispatchMessage(message, bridge);
+    }
 }

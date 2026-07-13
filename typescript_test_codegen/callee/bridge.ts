@@ -21,14 +21,7 @@ export interface Message {
   match(handlers: MessageHandler): void;
 }
 
-export type ParameterKind =
-  | "integer"
-  | "float"
-  | "boolean"
-  | "string"
-  | "reference";
-
-export type ParamValue =
+export type Parameter =
   | { kind: "integer"; value: number }
   | { kind: "float"; value: number }
   | { kind: "boolean"; value: boolean }
@@ -38,14 +31,14 @@ export type ParamValue =
 export class CallMessage implements Message {
   readonly invocationPath: string;
   readonly returnSink: UUID;
-  readonly positionalParameters: ParamValue[];
-  readonly namedParameters: Map<string, ParamValue>;
+  readonly positionalParameters: Parameter[];
+  readonly namedParameters: Map<string, Parameter>;
 
   constructor(args: {
     invocationPath: string;
     returnSink: UUID;
-    positional?: ParamValue[];
-    named?: Map<string, ParamValue>;
+    positional?: Parameter[];
+    named?: Map<string, Parameter>;
   }) {
     this.invocationPath = args.invocationPath;
     this.returnSink = args.returnSink;
@@ -106,9 +99,9 @@ export class RequestMessage implements Message {
 
 export class SendMessage implements Message {
   readonly reference: UUID;
-  readonly value: ParamValue;
+  readonly value: Parameter;
 
-  constructor(args: { reference: UUID; value: ParamValue }) {
+  constructor(args: { reference: UUID; value: Parameter }) {
     this.reference = args.reference;
     this.value = args.value;
   }
@@ -128,9 +121,9 @@ export class SendMessage implements Message {
 
 export class ErrorMessage implements Message {
   readonly reference: UUID;
-  readonly error: ParamValue;
+  readonly error: Parameter;
 
-  constructor(args: { reference: UUID; error: ParamValue }) {
+  constructor(args: { reference: UUID; error: Parameter }) {
     this.reference = args.reference;
     this.error = args.error;
   }
@@ -200,8 +193,8 @@ function parseCall(lines: string[]): CallMessage {
   }
   const invocationPath = decodeBase64NoPadUtf8(lines[1]);
   const returnSink = lines[2];
-  const positional: ParamValue[] = [];
-  const named = new Map<string, ParamValue>();
+  const positional: Parameter[] = [];
+  const named = new Map<string, Parameter>();
   for (let i = 3; i < lines.length; i++) {
     const line = lines[i];
     if (line.length === 0) {
@@ -266,7 +259,7 @@ function assertNoCRLF(text: string): void {
 /* PARAMETERS */
 
 type WireParameter = {
-  value: ParamValue;
+  value: Parameter;
   name?: string;
 };
 
@@ -279,7 +272,7 @@ function decodeParameterLine(line: string): WireParameter {
   }
   const descriptor = main[0];
   const raw = main.slice(1);
-  let value: ParamValue;
+  let value: Parameter;
   switch (descriptor) {
     case "i":
       value = { kind: "integer", value: parseSignedHex(raw) };
@@ -315,14 +308,14 @@ function decodeParameterLine(line: string): WireParameter {
   return name === undefined ? { value } : { value, name };
 }
 
-function encodeParameterLine(value: ParamValue, name?: string): string {
+function encodeParameterLine(value: Parameter, name?: string): string {
   const main = encodeParameterValue(value);
   if (name === undefined) return main;
   assertNoCRLF(name);
   return main + " " + encodeBase64NoPadUtf8(name);
 }
 
-function encodeParameterValue(value: ParamValue): string {
+function encodeParameterValue(value: Parameter): string {
   switch (value.kind) {
     case "integer":
       return "i" + formatSignedHex(value.value);
