@@ -10,10 +10,15 @@ export function dispatchMessage(
 ) {
   message.match({
     call(message) {
+      const positionalParameters = message.positionalParameters.map((param) => param.value);
+      const namedParameters = new Map<string, any>();
+      for (const [key, param] of message.namedParameters.entries()) {
+        namedParameters.set(key, param.value);
+      }
       const result = dispatchFunction(
         message.invocationPath,
-        message.positionalParameters,
-        message.namedParameters
+        positionalParameters,
+        namedParameters
       );
       const response = new SendMessage({
         reference: message.returnSink,
