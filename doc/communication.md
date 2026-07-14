@@ -18,7 +18,7 @@ Netstrings use the following format: `<len>:<msg>,`.
 Each message is made up of a message kind and different components, depending on the kind.
 The kind is situated at the beginning of the message.
 The message kind and the components are separated by newlines.
-Currently, there are four kinds of messages: Call (C), Request (R), Send (S), and Error (E), which are described in the following sections.
+Currently, there are five kinds of messages: Call (C), Method Call (M), Request (R), Send (S), and Error (E), which are described in the following sections.
 The messages are kept concise intentionally (e.g. by using abbreviations) to reduce communication and parsing overhead.
 
 ### Call
@@ -59,6 +59,53 @@ Encoded:
 ```
 C
 Zm9v:QmFy#c29tZQ==
+352b6376-fff5-4dfa-8337-c85f175c349d
+i-2a
+rdd1835c3-24ee-44df-b867-71c136e058ca
+```
+
+### Method Call
+
+The "Method Call" (M) message has a similar intent and design compared to the "Call" (C) message.
+It is used to invoke methods on instances allocated the other side of the FFI and has the following schema:
+
+```
+M
+<called reference>
+<method name>
+<return value sink>
+<parameters>
+```
+
+The individual components are defined as follows:
+
+- called reference: A uuid reference to the object on which the method is called.
+- method name: A base64 encoded name of the method called on the object.
+- return value sink/parameters: analog to the "Call" (C) message.
+
+Example:
+
+The following message calls the method `some` on the reference `"6b5e688b-22cf-40b4-a01a-ae705b3726cb"`.
+The method has two parameters, with the first one being an integer of value `-42` and the second one being a reference to the object with the UUID `"dd1835c3-24ee-44df-b867-71c136e058ca"`.
+The return value is supposed to be sent back with the reference `"352b6376-fff5-4dfa-8337-c85f175c349d"` attached as its sink.
+
+Unencoded (just for demonstration purposes, real messages are always encoded):
+
+```
+M
+6b5e688b-22cf-40b4-a01a-ae705b3726cb
+some
+352b6376-fff5-4dfa-8337-c85f175c349d
+i-42
+rdd1835c3-24ee-44df-b867-71c136e058ca
+```
+
+Encoded:
+
+```
+M
+6b5e688b-22cf-40b4-a01a-ae705b3726cb
+c29tZQ==
 352b6376-fff5-4dfa-8337-c85f175c349d
 i-2a
 rdd1835c3-24ee-44df-b867-71c136e058ca
