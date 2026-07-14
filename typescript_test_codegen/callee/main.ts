@@ -15,10 +15,10 @@ const advertiseSocket = (() => {
 
 const socketServer = new SynchronousSocketServer(path);
 while (true) {
+    advertiseSocket();
     const streamSocket = socketServer.accept();
     const datagramSocket = new MessageSocket(streamSocket);
     const bridge = new Bridge(datagramSocket);
-    advertiseSocket();
     while (true) {
         const message = bridge.nextMessage();
         if (message === null) {
