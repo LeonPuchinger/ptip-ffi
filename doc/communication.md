@@ -23,7 +23,7 @@ The messages are kept concise intentionally (e.g. by using abbreviations) to red
 
 ### Call
 
-The "Call" (C) message is used to invoke functions or methods on the other side of the FFI and has the following schema:
+The "Call" (C) message is used to invoke functions or static methods on the other side of the FFI and has the following schema:
 
 ```
 C
@@ -34,13 +34,13 @@ C
 
 The individual components are defined as follows:
 
-- invocation path: A base64 encoded path to the function or method in the module system of the library. The individual components of the path are separated by dots in the unencoded version. If the path is referring to a method, the last component of the path is the name of the method, separated by a colon.
+- invocation path: A path to the function or static method in the module system of the library. Each component of the path is encoded as base64, however, the separators between the components are not. The first part of the invocation path is the module path, indicating where in the module system the called upon function or method is located. Each component of the module path is separated by a forward slash (`/`). If the called function is a top-level function (meaning in the entry-point module of the library), the module path is omitted and no separation character to the next part is necessary. If the invocation path points to a function, the module path is followed by the name of the function, separated by a single dot (`.`). If the invocation path refers to a static method, the module path is followed by the name of the type that contains the method, separated by a single colon (`:`). The name of the static method is separated from the type with a hastag character (`#`).
 - return value sink: A uuid that the callee can use as a reference to send the return value to using a "Send" (S) message. If the invocated function or method does not have a return value, the sink still needs to be set so the other side has a chance to receive a potential error value.
 - parameters: A newline separated list of the parameters passed to the function or method. Refer to [the section on parameters](#parameters) for more information.
 
 Example:
 
-The following message calls the method `some` on value `bar` located in module `foo`.
+The following message calls the static method `some` on type `Bar` located in module `foo`.
 The method has two parameters, with the first one being an integer of value `-42` and the second one being a reference to the object with the UUID `"dd1835c3-24ee-44df-b867-71c136e058ca"`.
 The return value is supposed to be sent back with the reference `"352b6376-fff5-4dfa-8337-c85f175c349d"` attached as its sink.
 
@@ -48,7 +48,7 @@ Unencoded (just for demonstration purposes, real messages are always encoded):
 
 ```
 C
-foo.bar:some
+foo:Bar#some
 352b6376-fff5-4dfa-8337-c85f175c349d
 i-42
 rdd1835c3-24ee-44df-b867-71c136e058ca
@@ -58,7 +58,7 @@ Encoded:
 
 ```
 C
-Zm9vLmJhcjpzb21l
+Zm9v:QmFy#c29tZQ==
 352b6376-fff5-4dfa-8337-c85f175c349d
 i-2a
 rdd1835c3-24ee-44df-b867-71c136e058ca
