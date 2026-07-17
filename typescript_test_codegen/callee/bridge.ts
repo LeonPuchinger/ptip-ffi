@@ -18,6 +18,7 @@ export type MessageHandler = {
 };
 
 export interface Message {
+  kind: "call" | "method" | "request" | "send" | "error";
   serialize(): string;
   match(handlers: MessageHandler): void;
 }
@@ -34,6 +35,7 @@ export type CallTarget =
   | { kind: "staticMethod"; typeName: string; methodName: string };
 
 export class CallMessage implements Message {
+  readonly kind = "call";
   readonly modulePath: string[];
   readonly callee: CallTarget;
   readonly returnSink: UUID;
@@ -77,6 +79,7 @@ export class CallMessage implements Message {
 }
 
 export class MethodMessage implements Message {
+  readonly kind = "method";
   readonly calledReference: UUID;
   readonly methodName: string;
   readonly returnSink: UUID;
@@ -122,6 +125,7 @@ export class MethodMessage implements Message {
 }
 
 export class RequestMessage implements Message {
+  readonly kind = "request";
   readonly parent: UUID;
   readonly accessor: string;
   readonly valueSink: UUID;
@@ -150,6 +154,7 @@ export class RequestMessage implements Message {
 }
 
 export class SendMessage implements Message {
+  readonly kind = "send";
   readonly reference: UUID;
   readonly value: Parameter;
 
@@ -172,6 +177,7 @@ export class SendMessage implements Message {
 }
 
 export class ErrorMessage implements Message {
+  readonly kind = "error";
   readonly reference: UUID;
   readonly error: Parameter;
 
