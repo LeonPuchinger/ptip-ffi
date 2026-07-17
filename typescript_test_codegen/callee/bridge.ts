@@ -11,6 +11,7 @@ export type UUID = string;
 
 export type MessageHandler = {
   call?: (message: CallMessage) => void;
+  method?: (message: MethodMessage) => void;
   request?: (message: RequestMessage) => void;
   send?: (message: SendMessage) => void;
   error?: (message: ErrorMessage) => void;
@@ -65,6 +66,51 @@ export class CallMessage implements Message {
   match(handlers: MessageHandler): void {
     if (handlers.call) {
       handlers.call(this);
+    }
+  }
+}
+
+export class MethodMessage implements Message {
+  readonly calledReference: UUID;
+  readonly methodName: string;
+  readonly returnSink: UUID;
+  readonly positionalParameters: Parameter[];
+  readonly namedParameters: Map<string, Parameter>;
+
+  constructor(args: {
+    calledReference: UUID;
+    methodName: string;
+    returnSink: UUID;
+    positional?: Parameter[];
+    named?: Map<string, Parameter>;
+  }) {
+    this.calledReference = args.calledReference;
+    this.methodName = args.methodName;
+    this.returnSink = args.returnSink;
+    this.positionalParameters = args.positional ?? [];
+    this.namedParameters = args.named ?? new Map();
+  }
+
+  serialize(): string {
+    assertNoCRLF(this.methodName);
+    const lines: string[] = [
+      "M",
+      this.calledReference,
+      encodeBase64NoPadUtf8(this.methodName),
+      this.returnSink,
+    ];
+    for (const p of this.positionalParameters) {
+      lines.push(encodeParameterLine(p));
+    }
+    for (const [name, value] of this.namedParameters) {
+      lines.push(encodeParameterLine(value, name));
+    }
+    return lines.join("\n");
+  }
+
+  match(handlers: MessageHandler): void {
+    if (handlers.method) {
+      handlers.method(this);
     }
   }
 }
@@ -176,6 +222,8 @@ function parseWireMessage(text: string): Message {
   switch (kind) {
     case "C":
       return parseCall(lines);
+    case "M":
+      return parseMethod(lines);
     case "R":
       return parseRequest(lines);
     case "S":
@@ -210,6 +258,36 @@ function parseCall(lines: string[]): CallMessage {
     }
   }
   return new CallMessage({ invocationPath, returnSink, positional, named });
+}
+
+function parseMethod(lines: string[]): MethodMessage {
+  if (lines.length < 4) {
+    throw new Error("Invalid Method message: expected at least 4 lines");
+  }
+  const calledReference = lines[1];
+  const methodName = decodeBase64NoPadUtf8(lines[2]);
+  const returnSink = lines[3];
+  const positional: Parameter[] = [];
+  const named = new Map<string, Parameter>();
+  for (let i = 4; i < lines.length; i++) {
+    const line = lines[i];
+    if (line.length === 0) {
+      throw new Error("Invalid Method message: empty parameter line");
+    }
+    const { value, name } = decodeParameterLine(line);
+    if (name !== undefined) {
+      named.set(name, value);
+    } else {
+      positional.push(value);
+    }
+  }
+  return new MethodMessage({
+    calledReference,
+    methodName,
+    returnSink,
+    positional,
+    named,
+  });
 }
 
 function parseRequest(lines: string[]): RequestMessage {
