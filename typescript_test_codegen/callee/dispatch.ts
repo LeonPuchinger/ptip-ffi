@@ -4,7 +4,7 @@ import {
   Parameter,
   SendMessage,
 } from "./bridge.ts";
-import { trim_whitespace } from "./library/index.ts";
+import { takes_point, trim_whitespace } from "./library/index.ts";
 
 const instanceRegistry = new Map<string, unknown>();
 
@@ -14,10 +14,29 @@ export function dispatchMessage(
 ) {
   message.match({
     call(message) {
-      const positionalParameters = message.positionalParameters.map((param) => param.value);
+      const positionalParameters = message.positionalParameters.map((param) => {
+        if (param.kind === "reference") {
+          const instance = instanceRegistry.get(param.value);
+          if (instance === undefined) {
+            throw new Error(`Instance ${param.value} not found`);
+          }
+          return instance;
+        }
+        return param.value;
+      });
       const namedParameters = new Map<string, any>();
       for (const [key, param] of message.namedParameters.entries()) {
-        namedParameters.set(key, param.value);
+        let value: any;
+        if (param.kind === "reference") {
+          const instance = instanceRegistry.get(param.value);
+          if (instance === undefined) {
+            throw new Error(`Instance ${param.value} not found`);
+          }
+          value = instance;
+        } else {
+          value = param.value;
+        }
+        namedParameters.set(key, value);
       }
       const result = dispatchFunction(
         message.modulePath,
@@ -36,10 +55,29 @@ export function dispatchMessage(
       if (instance === undefined) {
         throw new Error(`Instance ${message.calledReference} not found`);
       }
-      const positionalParameters = message.positionalParameters.map((param) => param.value);
+      const positionalParameters = message.positionalParameters.map((param) => {
+        if (param.kind === "reference") {
+          const instance = instanceRegistry.get(param.value);
+          if (instance === undefined) {
+            throw new Error(`Instance ${param.value} not found`);
+          }
+          return instance;
+        }
+        return param.value;
+      });
       const namedParameters = new Map<string, any>();
       for (const [key, param] of message.namedParameters.entries()) {
-        namedParameters.set(key, param.value);
+        let value: any;
+        if (param.kind === "reference") {
+          const instance = instanceRegistry.get(param.value);
+          if (instance === undefined) {
+            throw new Error(`Instance ${param.value} not found`);
+          }
+          value = instance;
+        } else {
+          value = param.value;
+        }
+        namedParameters.set(key, value);
       }
       const result = dispatchMethod(
         instance,
@@ -71,6 +109,10 @@ export function dispatchFunction(
             case "trim_whitespace": {
               const result = trim_whitespace(positionalParameters[0] as string);
               return { kind: "string", value: result };
+            }
+            case "takes_point": {
+              const result = takes_point(positionalParameters[0] as any);
+              return { kind: "float", value: result };
             }
           }
           break;
