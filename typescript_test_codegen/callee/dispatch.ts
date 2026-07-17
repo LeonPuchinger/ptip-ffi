@@ -105,9 +105,6 @@ function dispatchMethod(
     return { kind: "string", value: result };
   }
   if (typeof result === "number") {
-    if (Number.isInteger(result)) {
-      return { kind: "integer", value: result };
-    }
     return { kind: "float", value: result };
   }
   if (typeof result === "boolean") {
