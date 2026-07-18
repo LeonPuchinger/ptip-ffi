@@ -36,14 +36,14 @@ export type CallTarget =
 
 export class CallMessage implements Message {
   readonly kind = "call";
-  readonly modulePath: string[];
+  readonly modulePath: string;
   readonly callee: CallTarget;
   readonly returnSink: UUID;
   readonly positionalParameters: Parameter[];
   readonly namedParameters: Map<string, Parameter>;
 
   constructor(args: {
-    modulePath: string[];
+    modulePath: string;
     callee: CallTarget;
     returnSink: UUID;
     positional?: Parameter[];
@@ -57,6 +57,7 @@ export class CallMessage implements Message {
   }
 
   serialize(): string {
+    assertNoCRLF(this.modulePath);
     const lines: string[] = [
       "C",
       serializeInvocationPath(this.modulePath, this.callee),
@@ -346,21 +347,19 @@ function assertNoCRLF(text: string): void {
   }
 }
 
-function serializeInvocationPath(modulePath: string[], callee: CallTarget): string {
-  for (const moduleName of modulePath) {
-    assertNoCRLF(moduleName);
-  }
+function serializeInvocationPath(modulePath: string, callee: CallTarget): string {
+  assertNoCRLF(modulePath);
   switch (callee.kind) {
     case "function":
       assertNoCRLF(callee.name);
       if (modulePath.length === 0) {
         return encodeBase64NoPadUtf8(callee.name);
       }
-      return `${modulePath.map(encodeBase64NoPadUtf8).join("/")}.${encodeBase64NoPadUtf8(callee.name)}`;
+      return `${encodeModulePath(modulePath)}.${encodeBase64NoPadUtf8(callee.name)}`;
     case "staticMethod": {
       assertNoCRLF(callee.typeName);
       assertNoCRLF(callee.methodName);
-      const modulePrefix = modulePath.map(encodeBase64NoPadUtf8).join("/");
+      const modulePrefix = encodeModulePath(modulePath);
       const calleePart = `${encodeBase64NoPadUtf8(callee.typeName)}#${encodeBase64NoPadUtf8(callee.methodName)}`;
       return modulePrefix.length === 0 ? calleePart : `${modulePrefix}:${calleePart}`;
     }
@@ -368,7 +367,7 @@ function serializeInvocationPath(modulePath: string[], callee: CallTarget): stri
 }
 
 function parseInvocationPath(wirePath: string): {
-  modulePath: string[];
+  modulePath: string;
   callee: CallTarget;
 } {
   if (wirePath.includes(":")) {
@@ -377,7 +376,7 @@ function parseInvocationPath(wirePath: string): {
     if (hashIndex === -1) {
       throw new Error("Invalid Call message: missing # in static method path");
     }
-    const modulePath = parseModulePath(wirePath.slice(0, colonIndex));
+    const modulePath = decodeModulePath(wirePath.slice(0, colonIndex));
     const typeName = decodeBase64NoPadUtf8(wirePath.slice(colonIndex + 1, hashIndex));
     const methodName = decodeBase64NoPadUtf8(wirePath.slice(hashIndex + 1));
     return {
@@ -389,12 +388,12 @@ function parseInvocationPath(wirePath: string): {
   const dotIndex = wirePath.indexOf(".");
   if (dotIndex === -1) {
     return {
-      modulePath: [],
+      modulePath: "",
       callee: { kind: "function", name: decodeBase64NoPadUtf8(wirePath) },
     };
   }
 
-  const modulePath = parseModulePath(wirePath.slice(0, dotIndex));
+  const modulePath = decodeModulePath(wirePath.slice(0, dotIndex));
   const name = decodeBase64NoPadUtf8(wirePath.slice(dotIndex + 1));
   return {
     modulePath,
@@ -402,11 +401,24 @@ function parseInvocationPath(wirePath: string): {
   };
 }
 
-function parseModulePath(wireModulePath: string): string[] {
-  if (wireModulePath.length === 0) {
-    return [];
+function encodeModulePath(modulePath: string): string {
+  if (modulePath.length === 0) {
+    return "";
   }
-  return wireModulePath.split("/").map((component) => decodeBase64NoPadUtf8(component));
+  return modulePath
+    .split("/")
+    .map((component) => encodeBase64NoPadUtf8(component))
+    .join("/");
+}
+
+function decodeModulePath(wireModulePath: string): string {
+  if (wireModulePath.length === 0) {
+    return "";
+  }
+  return wireModulePath
+    .split("/")
+    .map((component) => decodeBase64NoPadUtf8(component))
+    .join("/");
 }
 
 /* PARAMETERS */

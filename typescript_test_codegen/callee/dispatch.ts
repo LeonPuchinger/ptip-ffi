@@ -24,9 +24,9 @@ export function dispatchMessage(
         }
         return param.value;
       });
-      const namedParameters = new Map<string, any>();
+      const namedParameters = new Map<string, unknown>();
       for (const [key, param] of message.namedParameters.entries()) {
-        let value: any;
+        let value: unknown;
         if (param.kind === "reference") {
           const instance = instanceRegistry.get(param.value);
           if (instance === undefined) {
@@ -65,9 +65,9 @@ export function dispatchMessage(
         }
         return param.value;
       });
-      const namedParameters = new Map<string, any>();
+      const namedParameters = new Map<string, unknown>();
       for (const [key, param] of message.namedParameters.entries()) {
-        let value: any;
+        let value: unknown;
         if (param.kind === "reference") {
           const instance = instanceRegistry.get(param.value);
           if (instance === undefined) {
@@ -95,15 +95,14 @@ export function dispatchMessage(
 }
 
 export function dispatchFunction(
-  modulePath: string[],
+  modulePath: string,
   callee: { kind: "function"; name: string } | { kind: "staticMethod"; typeName: string; methodName: string },
   positionalParameters: unknown[],
-  namedParameters: Map<string, any> = new Map(),
+  namedParameters: Map<string, unknown> = new Map(),
 ): Parameter {
-  const concatenatedModulePath = modulePath.join("/");
   switch (callee.kind) {
     case "function": {
-      switch (concatenatedModulePath) {
+      switch (modulePath) {
         case "": {
           switch (callee.name) {
             case "trim_whitespace": {
@@ -111,17 +110,19 @@ export function dispatchFunction(
               return { kind: "string", value: result };
             }
             case "takes_point": {
-              const result = takes_point(positionalParameters[0] as any);
+              const result = takes_point(
+                positionalParameters[0] as Parameters<typeof takes_point>[0],
+              );
               return { kind: "float", value: result };
             }
           }
           break;
         }
       }
-      throw new Error(`Function ${concatenatedModulePath}.${callee.name} not found`);
+      throw new Error(`Function ${modulePath}.${callee.name} not found`);
     }
     case "staticMethod": {
-      throw new Error(`Static method not found: ${concatenatedModulePath}.${callee.typeName}.${callee.methodName}`);
+      throw new Error(`Static method not found: ${modulePath}.${callee.typeName}.${callee.methodName}`);
     }
   }
 }
@@ -130,7 +131,7 @@ function dispatchMethod(
   instance: unknown,
   methodName: string,
   positionalParameters: unknown[],
-  _namedParameters: Map<string, any> = new Map(),
+  namedParameters: Map<string, unknown> = new Map(),
 ): Parameter {
   if (instance === null || typeof instance !== "object") {
     throw new Error(`Invalid instance for method ${methodName}`);
