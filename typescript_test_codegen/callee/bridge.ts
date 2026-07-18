@@ -15,10 +15,11 @@ export type MessageHandler = {
   request?: (message: RequestMessage) => void;
   send?: (message: SendMessage) => void;
   error?: (message: ErrorMessage) => void;
+  drop?: (message: DropMessage) => void;
 };
 
 export interface Message {
-  kind: "call" | "method" | "request" | "send" | "error";
+  kind: "call" | "method" | "request" | "send" | "error" | "drop";
   serialize(): string;
   match(handlers: MessageHandler): void;
 }
@@ -200,6 +201,25 @@ export class ErrorMessage implements Message {
   }
 }
 
+export class DropMessage implements Message {
+  readonly kind = "drop";
+  readonly reference: UUID;
+
+  constructor(args: { reference: UUID }) {
+    this.reference = args.reference;
+  }
+
+  serialize(): string {
+    return ["D", this.reference].join("\n");
+  }
+
+  match(handlers: MessageHandler): void {
+    if (handlers.drop) {
+      handlers.drop(this);
+    }
+  }
+}
+
 export class Bridge {
   constructor(private readonly socket: MessageSocket) { }
 
@@ -243,6 +263,8 @@ function parseWireMessage(text: string): Message {
       return parseSend(lines);
     case "E":
       return parseError(lines);
+    case "D":
+      return parseDrop(lines);
     default:
       throw new Error(`Invalid message kind: ${kind}`);
   }
@@ -339,6 +361,14 @@ function parseError(lines: string[]): ErrorMessage {
     );
   }
   return new ErrorMessage({ reference, error: value });
+}
+
+function parseDrop(lines: string[]): DropMessage {
+  if (lines.length !== 2) {
+    throw new Error("Invalid Drop message: expected exactly 2 lines");
+  }
+  const reference = lines[1];
+  return new DropMessage({ reference });
 }
 
 function assertNoCRLF(text: string): void {

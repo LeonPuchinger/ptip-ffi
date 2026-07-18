@@ -91,6 +91,9 @@ export function dispatchMessage(
       });
       bridge.send(response);
     },
+    drop(message) {
+      instanceRegistry.delete(message.reference);
+    },
   });
 }
 
