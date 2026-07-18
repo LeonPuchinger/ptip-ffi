@@ -18,7 +18,7 @@ Netstrings use the following format: `<len>:<msg>,`.
 Each message is made up of a message kind and different components, depending on the kind.
 The kind is situated at the beginning of the message.
 The message kind and the components are separated by newlines.
-Currently, there are five kinds of messages: Call (C), Method Call (M), Request (R), Send (S), and Error (E), which are described in the following sections.
+Currently, there are six kinds of messages: Call (C), Method Call (M), Request (R), Send (S), Error (E), and Drop (D), which are described in the following sections.
 The messages are kept concise intentionally (e.g. by using abbreviations) to reduce communication and parsing overhead.
 
 ### Call
@@ -200,6 +200,31 @@ The following "Error" message returns an error object to the sink `"dd1835c3-24e
 E
 dd1835c3-24ee-44df-b867-71c136e058ca
 r02e4a529-ea4c-4d70-b718-d8db2b883880
+```
+
+### Drop
+
+The "Drop" (D) message is used to instruct the library side of the FFI to drop/discard a reference.
+In a GC-based langauge, this means that the references to that object should be removed.
+In a langauge using manual memory management, the object should be deallocated.
+It has the following schema:
+
+```
+D
+<reference>
+```
+
+The individual components are defined as follows:
+
+- reference: The UUID address of the object to free
+
+Example:
+
+The following "Drop" message instructs the library to dellocate the object with the UUID `"dd1835c3-24ee-44df-b867-71c136e058ca"`
+
+```
+D
+dd1835c3-24ee-44df-b867-71c136e058ca
 ```
 
 ## Parameters
