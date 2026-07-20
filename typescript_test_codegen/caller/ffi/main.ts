@@ -3,6 +3,13 @@ import { MessageSocket, SynchronousSocket } from "./socket.ts";
 import { runtimeEnvironment } from "./util.ts";
 
 let internal_bridge: Bridge;
+let spawnSync: typeof import("node:child_process").spawnSync | undefined;
+
+// Conditionally load spawnSync at module level via top-level await
+const _runtimeEnv = runtimeEnvironment();
+if (_runtimeEnv === "node") {
+    ({ spawnSync } = await import("node:child_process"));
+}
 
 export function establishBridge(): Bridge {
     if (internal_bridge) return internal_bridge;
@@ -13,8 +20,8 @@ export function establishBridge(): Bridge {
     const invoke = environment === "deno"
         ? Deno.env.get("FFI_LIBRARY_INVOKE")
         : environment === "node"
-        ? process.env.FFI_LIBRARY_INVOKE
-        : undefined;
+            ? process.env.FFI_LIBRARY_INVOKE
+            : undefined;
 
     if (!invoke || invoke.trim() === "") {
         throw new Error("FFI_LIBRARY_INVOKE is not set");
@@ -45,9 +52,7 @@ export function establishBridge(): Bridge {
             );
         }
     } else if (environment === "node") {
-        // @ts-ignore - require is available in Node.js
-        const { spawnSync } = require("node:child_process");
-        const result = spawnSync("/bin/sh", ["-c", invoke], {
+        const result = spawnSync!("/bin/sh", ["-c", invoke], {
             stdio: ["ignore", "pipe", "pipe"],
             encoding: "utf8",
         });
