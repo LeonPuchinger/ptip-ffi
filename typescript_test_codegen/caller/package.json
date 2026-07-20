@@ -1,0 +1,12 @@
+{
+  "name": "@typescript_test_codegen/caller",
+  "description": "Imagining what the output of ptip-ffi codegen could look like",
+  "version": "0.0.1",
+  "main": "index.ts",
+  "devDependencies": {
+
+  },
+  "dependencies": {
+    "synchronous-socket": "github:leonpuchinger/synchronous-socket#feat-n-api"
+  }
+}

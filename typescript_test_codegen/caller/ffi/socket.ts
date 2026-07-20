@@ -1,213 +1,68 @@
-import { runtimeEnvironment } from "./util.ts";
+import { SynchronousSocket as NativeSynchronousSocket, SynchronousSocketServer as NativeSynchronousSocketServer } from "synchronous-socket";
 
 type Bytes = Uint8Array<ArrayBufferLike>;
 
 /**
- * An abstraction over a byte stream that can be used for communication over a socket or similar transport.
+ * An abstraction over a synchronous byte stream that can be used for communication over a socket or similar transport.
  * The `read` method reads data into the provided buffer, returning the number of bytes read, or `null` on EOF.
  * The `write` method writes data from the provided buffer, returning the number of bytes written.
  * The `close` method closes the stream and releases any resources associated with it.
  */
-export interface Stream {
-  read(buffer: Bytes): Promise<number | null>;
-  write(buffer: Bytes): Promise<number>;
+export interface SynchronousStream {
+  read(buffer: Bytes): number | null;
+  write(buffer: Bytes): number;
   close(): void;
 }
 
 /**
- * A wrapper around `Deno.Conn` for use with Deno.
+ * A wrapper around `synchronous-socket`, making it conform to the `SynchronousStream` interface.
  */
-class DenoConnection implements Stream {
-  private connection: Deno.Conn;
+export class SynchronousSocket implements SynchronousStream {
+  private socket: NativeSynchronousSocket
 
-  constructor(connection: Deno.Conn) {
-    this.connection = connection;
-  }
-
-  read(buffer: Bytes): Promise<number | null> {
-    return this.connection.read(buffer);
-  }
-
-  write(buffer: Bytes): Promise<number> {
-    return this.connection.write(buffer);
-  }
-
-  close() {
-    this.connection.close();
-  }
-}
-
-import { Buffer } from "node:buffer";
-import net from "node:net";
-
-/**
- * A wrapper around `net.Socket` for use with Node.js.
- */
-export class NodeStream implements Stream {
-  private readonly socket: net.Socket;
-  private ended = false;
-  private pendingRead: Promise<number | null> | null = null;
-
-  constructor(socket: net.Socket) {
+  constructor(socket: NativeSynchronousSocket) {
     this.socket = socket;
-    // Start paused: only read when someone calls `read()`.
-    this.socket.pause();
-
-    const markEnded = () => {
-      this.ended = true;
-    };
-
-    // Track EOF even if no read is currently pending.
-    this.socket.on("end", markEnded);
-    this.socket.on("close", markEnded);
   }
 
-  read(buffer: Bytes): Promise<number | null> {
-    // Optional safety: disallow concurrent reads (the rest of the code assumes 0 or 1 pending read).
-    if (this.pendingRead) {
-      throw new Error("Concurrent read() calls are not supported");
+  static fromPath(path: string) {
+    const socket = new NativeSynchronousSocket(path);
+    socket.connect();
+    return new SynchronousSocket(socket);
+  }
+
+  read(buffer: Bytes): number | null {
+    const bytesRead = this.socket.readIntoBuffer(buffer);
+    if (bytesRead === null || bytesRead === 0) {
+      return null;
     }
-    if (this.ended) return Promise.resolve(null);
-    this.pendingRead = new Promise<number | null>((resolve) => {
-      let settled = false;
-      const cleanup = () => {
-        if (settled) return;
-        settled = true;
-        this.socket.removeListener("data", onData);
-        this.socket.removeListener("end", onEnd);
-        this.socket.removeListener("close", onClose);
-        // Backpressure lives in the socket: pause whenever no read is actively waiting.
-        this.socket.pause();
-        this.pendingRead = null;
-      };
-
-      const onData = (chunk: Buffer) => {
-        cleanup();
-        const n = Math.min(buffer.length, chunk.length);
-        buffer.set(chunk.subarray(0, n));
-        // Preserve remaining bytes for the next read.
-        if (n < chunk.length) {
-          const head = chunk.subarray(0, n);
-          buffer.set(new Uint8Array(head));
-          if (n < chunk.length) {
-            const rest = chunk.subarray(n);
-            this.socket.unshift(new Uint8Array(rest));
-          }
-        }
-        resolve(n);
-      };
-
-      const onEnd = () => {
-        this.ended = true;
-        cleanup();
-        resolve(null);
-      };
-
-      const onClose = () => {
-        this.ended = true;
-        cleanup();
-        resolve(null);
-      };
-
-      this.socket.once("data", onData);
-      this.socket.once("end", onEnd);
-      this.socket.once("close", onClose);
-      // Allow the socket to emit exactly one chunk (or EOF) for this read.
-      this.socket.resume();
-    });
-    return this.pendingRead;
+    return bytesRead;
   }
 
-  write(buffer: Bytes): Promise<number> {
-    return new Promise((resolve, reject) => {
-      this.socket.write(buffer, (err) => {
-        if (err) reject(err);
-        else resolve(buffer.length);
-      });
-    });
+  write(buffer: Bytes): number {
+    return this.socket.writeFromBuffer(buffer);
   }
 
   close(): void {
-    this.socket.destroy();
+    this.socket.disconnect();
   }
 }
 
-/**
- * Connects to a unix domain socket at the given path, returning a `Stream` for communication.
- * The caller is responsible for cleaning up the socket file when done.
- * Note: this function is not designed to be used concurrently from multiple processes, and does not
- * implement any locking around the socket file.
- * TLDR: Intended for use in a client process that connects to a server.
- */
-export async function connectUnix(path: string): Promise<Stream> {
-  const env = runtimeEnvironment();
-  if (env === "deno") {
-    const conn = await Deno.connect({ transport: "unix", path });
-    return new DenoConnection(conn);
-  }
-  if (env === "node") {
-    const net = await import("node:net");
-    return new Promise((resolve, reject) => {
-      const socket = net.createConnection(path, () => {
-        resolve(new NodeStream(socket));
-      });
-      socket.on("error", reject);
-    });
-  }
-  throw new Error("Runtime environment not supported");
-}
+export class SynchronousSocketServer {
+  private server: NativeSynchronousSocketServer;
 
-/**
- * Listens for incoming connections on a unix domain socket at the given path, yielding a `Stream`
- * for each connection. The socket is created if it doesn't exist, and removed if it already exists.
- * The caller is responsible for cleaning up the socket file when done.
- * Note: this function is not designed to be used concurrently from multiple processes, and does not
- * implement any locking around the socket file.
- * TLDR: Intended for use in a server process that accepts connections from clients.
- */
-export async function* listenUnix(path: string): AsyncIterable<Stream> {
-  const environment = runtimeEnvironment();
-  if (environment === "deno") {
-    try {
-      await Deno.remove(path);
-    } catch {}
-    const listener = Deno.listen({ transport: "unix", path });
-    for await (const conn of listener) {
-      yield new DenoConnection(conn);
-    }
-    return;
+  constructor(path: string) {
+    this.server = new NativeSynchronousSocketServer(path);
+    this.server.listen();
   }
-  if (environment === "node") {
-    const net = await import("node:net");
-    const fs = await import("node:fs");
-    try {
-      fs.unlinkSync(path);
-    } catch {}
-    const server = net.createServer();
-    server.listen(path);
-    const queue: Stream[] = [];
-    let resolve: ((c: Stream) => void) | null = null;
-    server.on("connection", (socket) => {
-      const connection = new NodeStream(socket);
-      if (resolve) {
-        resolve(connection);
-        resolve = null;
-      } else {
-        queue.push(connection);
-      }
-    });
-    while (true) {
-      if (queue.length > 0) {
-        yield queue.shift()!;
-      } else {
-        const conn = await new Promise<Stream>((res) => {
-          resolve = res;
-        });
-        yield conn;
-      }
-    }
+
+  accept(): SynchronousSocket {
+    const socket = this.server.accept();
+    return new SynchronousSocket(socket);
   }
-  throw new Error("Runtime environment not supported");
+
+  close(): void {
+    this.server.close();
+  }
 }
 
 /**
@@ -218,37 +73,37 @@ export class MessageSocket {
   private buffer: Bytes = new Uint8Array(0);
   private decoder = new TextDecoder();
   private encoder = new TextEncoder();
-  private stream: Stream;
+  private stream: SynchronousStream;
 
-  constructor(conn: Stream) {
+  constructor(conn: SynchronousStream) {
     this.stream = conn;
   }
 
-  async send(data: Bytes) {
+  send(data: Bytes) {
     const header = this.encoder.encode(String(data.length) + ":");
     const trailer = this.encoder.encode(",");
-    await this.stream.write(header);
-    await this.stream.write(data);
-    await this.stream.write(trailer);
+    this.stream.write(header);
+    this.stream.write(data);
+    this.stream.write(trailer);
   }
 
-  async sendText(text: string) {
-    await this.send(this.encoder.encode(text));
+  sendText(text: string) {
+    this.send(this.encoder.encode(text));
   }
 
-  async receive(): Promise<Bytes | null> {
+  receive(): Bytes | null {
     while (true) {
       const msg = this.tryParse();
       if (msg) return msg;
       const chunk = new Uint8Array(1024);
-      const n = await this.stream.read(chunk);
+      const n = this.stream.read(chunk);
       if (n === null) return null;
       this.buffer = concat(this.buffer, chunk.subarray(0, n));
     }
   }
 
-  async receiveText(): Promise<string | null> {
-    const msg = await this.receive();
+  receiveText(): string | null {
+    const msg = this.receive();
     return msg ? this.decoder.decode(msg) : null;
   }
 
