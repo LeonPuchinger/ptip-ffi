@@ -18,7 +18,7 @@ Netstrings use the following format: `<len>:<msg>,`.
 Each message is made up of a message kind and different components, depending on the kind.
 The kind is situated at the beginning of the message.
 The message kind and the components are separated by newlines.
-Currently, there are six kinds of messages: Call (C), Method Call (M), Request (R), Send (S), Error (E), and Drop (D), which are described in the following sections.
+Currently, there are eight kinds of messages: Call (C), Method Call (M), Request (R), Update (U), Send (S), Acknowledge (A), Error (E), and Drop (D), which are described in the following sections.
 The messages are kept concise intentionally (e.g. by using abbreviations) to reduce communication and parsing overhead.
 
 ### Call
@@ -125,12 +125,12 @@ R
 The individual components are defined as follows:
 
 - parent reference: A UUID that marks the object on which the attribute is accessed.
-- accessor: A base64 encoded attribute that is accessed on the parent.
+- accessor: A base64 encoded attribute name that is accessed on the parent.
 - value sink: A UUID used as a reference in the "Send" message that returns the requested value.
 
 Example:
 
-The following requests the attribute `foo` on the object referred to by `"dd1835c3-24ee-44df-b867-71c136e058ca"`. Further, the sink `"f0b80bf1-9b5a-449f-b2b5-fa07f57c5287"` is specified to allow the sender to identify the returned value via a "Send" message.
+The following messsage requests the attribute `foo` on the object referred to by `"dd1835c3-24ee-44df-b867-71c136e058ca"`. Further, the sink `"f0b80bf1-9b5a-449f-b2b5-fa07f57c5287"` is specified to allow the sender to identify the returned value via a "Send" message.
 
 Unencoded (just for demonstration purposes, real messages are always encoded):
 
@@ -150,9 +150,52 @@ Zm9v
 f0b80bf1-9b5a-449f-b2b5-fa07f57c5287
 ```
 
+### Update
+
+The "Update" (U) message is used to update attributes of objects and has the following schema:
+
+```
+U
+<parent reference>
+<accessor>
+<acknowledge sink>
+<parameter>
+```
+
+The individual components are defined as follows:
+
+- parent reference: A UUID that marks the object on which the attribute is updated.
+- accessor: A base64 encoded attribute name that is updated on the parent.
+- value sink: A UUID used as a reference in the "Send" message that returns the requested value.
+- parameter: A single parameter that serves as the value to be written to the attribute. Only a positional parameter is supposed to be used here.
+
+Example:
+
+The following message updates the attribute `foo` on the object referred to by `"dd1835c3-24ee-44df-b867-71c136e058ca"`. Further, the sink `"f0b80bf1-9b5a-449f-b2b5-fa07f57c5287"` is specified to allow the sender to receive confiramtion of a successful update via an "Acknowledge" message.
+
+Unencoded (just for demonstration purposes, real messages are always encoded):
+
+```
+U
+dd1835c3-24ee-44df-b867-71c136e058ca
+foo
+f0b80bf1-9b5a-449f-b2b5-fa07f57c5287
+i42
+```
+
+Encoded:
+
+```
+U
+dd1835c3-24ee-44df-b867-71c136e058ca
+Zm9v
+f0b80bf1-9b5a-449f-b2b5-fa07f57c5287
+i2a
+```
+
 ### Send
 
-The "Send" (S) message is used to send values, usually as a response to a "Request" call or to transport a return value of a "Call" invocation.
+The "Send" (S) message is used to send values, usually as a response to a "Request" call or to transport a return value of a "Call" or "Method" invocation.
 It has the following schema:
 
 ```
@@ -163,8 +206,8 @@ S
 
 The individual components are defined as follows:
 
-- reference: The UUID address that was previously agreed upon as the sink for the "Send" message, for instance by a "Request" or "Call" message.
-- A single parameter that serves as the transferred value. Only a positional parameter is supposed to be used here.
+- reference: The UUID address that was previously agreed upon as the sink for the "Send" message, for instance by a "Request", "Call", or similar message.
+- parameter: A single parameter that serves as the transferred value. Only a positional parameter is supposed to be used here.
 
 Example:
 
@@ -200,6 +243,30 @@ The following "Error" message returns an error object to the sink `"dd1835c3-24e
 E
 dd1835c3-24ee-44df-b867-71c136e058ca
 r02e4a529-ea4c-4d70-b718-d8db2b883880
+```
+
+### Acknowledge
+
+The "Acknowledge" (A) message is used as a confirmation after a successful operation, such as an attribute update.
+In contrast to the "Send" or "Error" messages, "Acknowledge" does not carry a value.
+It has the following schema:
+
+```
+A
+<reference>
+```
+
+The individual components are defined as follows:
+
+- reference: The UUID address that was previously agreed upon as the sink for the "Acknowledge" message in the "Call" message. Instead of the return value, the error value is sent to the same sink.
+
+Example:
+
+The following "Acknowledge" message confirms a previous and successful "Update" operation for the agreed-upon acknowledge sink `"dd1835c3-24ee-44df-b867-71c136e058ca"`:
+
+```
+A
+dd1835c3-24ee-44df-b867-71c136e058ca
 ```
 
 ### Drop
