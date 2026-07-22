@@ -1,4 +1,4 @@
-import { CallMessage, ErrorMessage, MethodMessage, RequestMessage, SendMessage } from "./ffi/bridge.ts";
+import { AcknowledgeMessage, CallMessage, ErrorMessage, MethodMessage, RequestMessage, SendMessage, UpdateMessage } from "./ffi/bridge.ts";
 import { establishBridge } from "./ffi/main.ts";
 
 export function trim_whitespace(str: string): string {
@@ -113,6 +113,37 @@ export class Point {
         throw new Error(`Unexpected message kind: ${response.kind}`);
     }
 
+    set x(value: number) {
+        const acknowledgeSink = crypto.randomUUID();
+        const bridge = establishBridge();
+        bridge.send(
+            new UpdateMessage({
+                parent: this.uuid,
+                accessor: "x",
+                acknowledgeSink: acknowledgeSink,
+                value: {
+                    kind: Number.isInteger(value) ? "integer" : "float",
+                    value,
+                },
+            }),
+        );
+        const response = bridge.nextMessage();
+        if (response === null) {
+            throw new Error("No response received from the bridge");
+        }
+        if (response.kind === "error") {
+            throw (response as ErrorMessage).error.value;
+        }
+        if (response.kind === "acknowledge") {
+            const acknowledgeMessage = response as AcknowledgeMessage;
+            if (acknowledgeMessage.reference !== acknowledgeSink) {
+                throw new Error("Mismatched UUID in response");
+            }
+            return;
+        }
+        throw new Error(`Unexpected message kind: ${response.kind}`);
+    }
+
     get y(): number {
         const returnSink = crypto.randomUUID();
         const bridge = establishBridge();
@@ -143,6 +174,37 @@ export class Point {
             } else {
                 throw new Error("Unexpected message kind");
             }
+        }
+        throw new Error(`Unexpected message kind: ${response.kind}`);
+    }
+
+    set y(value: number) {
+        const acknowledgeSink = crypto.randomUUID();
+        const bridge = establishBridge();
+        bridge.send(
+            new UpdateMessage({
+                parent: this.uuid,
+                accessor: "y",
+                acknowledgeSink: acknowledgeSink,
+                value: {
+                    kind: Number.isInteger(value) ? "integer" : "float",
+                    value,
+                },
+            }),
+        );
+        const response = bridge.nextMessage();
+        if (response === null) {
+            throw new Error("No response received from the bridge");
+        }
+        if (response.kind === "error") {
+            throw (response as ErrorMessage).error.value;
+        }
+        if (response.kind === "acknowledge") {
+            const acknowledgeMessage = response as AcknowledgeMessage;
+            if (acknowledgeMessage.reference !== acknowledgeSink) {
+                throw new Error("Mismatched UUID in response");
+            }
+            return;
         }
         throw new Error(`Unexpected message kind: ${response.kind}`);
     }

@@ -13,13 +13,15 @@ export type MessageHandler = {
   call?: (message: CallMessage) => void;
   method?: (message: MethodMessage) => void;
   request?: (message: RequestMessage) => void;
+  update?: (message: UpdateMessage) => void;
   send?: (message: SendMessage) => void;
+  acknowledge?: (message: AcknowledgeMessage) => void;
   error?: (message: ErrorMessage) => void;
   drop?: (message: DropMessage) => void;
 };
 
 export interface Message {
-  kind: "call" | "method" | "request" | "send" | "error" | "drop";
+  kind: "call" | "method" | "request" | "update" | "send" | "acknowledge" | "error" | "drop";
   serialize(): string;
   match(handlers: MessageHandler): void;
 }
@@ -155,6 +157,38 @@ export class RequestMessage implements Message {
   }
 }
 
+export class UpdateMessage implements Message {
+  readonly kind = "update";
+  readonly parent: UUID;
+  readonly accessor: string;
+  readonly acknowledgeSink: UUID;
+  readonly value: Parameter;
+
+  constructor(args: { parent: UUID; accessor: string; acknowledgeSink: UUID; value: Parameter }) {
+    this.parent = args.parent;
+    this.accessor = args.accessor;
+    this.acknowledgeSink = args.acknowledgeSink;
+    this.value = args.value;
+  }
+
+  serialize(): string {
+    assertNoCRLF(this.accessor);
+    return [
+      "U",
+      this.parent,
+      encodeBase64NoPadUtf8(this.accessor),
+      this.acknowledgeSink,
+      encodeParameterLine(this.value),
+    ].join("\n");
+  }
+
+  match(handlers: MessageHandler): void {
+    if (handlers.update) {
+      handlers.update(this);
+    }
+  }
+}
+
 export class SendMessage implements Message {
   readonly kind = "send";
   readonly reference: UUID;
@@ -174,6 +208,25 @@ export class SendMessage implements Message {
   match(handlers: MessageHandler): void {
     if (handlers.send) {
       handlers.send(this);
+    }
+  }
+}
+
+export class AcknowledgeMessage implements Message {
+  readonly kind = "acknowledge";
+  readonly reference: UUID;
+
+  constructor(args: { reference: UUID }) {
+    this.reference = args.reference;
+  }
+
+  serialize(): string {
+    return ["A", this.reference].join("\n");
+  }
+
+  match(handlers: MessageHandler): void {
+    if (handlers.acknowledge) {
+      handlers.acknowledge(this);
     }
   }
 }
@@ -259,8 +312,12 @@ function parseWireMessage(text: string): Message {
       return parseMethod(lines);
     case "R":
       return parseRequest(lines);
+    case "U":
+      return parseUpdate(lines);
     case "S":
       return parseSend(lines);
+    case "A":
+      return parseAcknowledge(lines);
     case "E":
       return parseError(lines);
     case "D":
@@ -335,6 +392,20 @@ function parseRequest(lines: string[]): RequestMessage {
   return new RequestMessage({ parent, accessor, valueSink });
 }
 
+function parseUpdate(lines: string[]): UpdateMessage {
+  if (lines.length !== 5) {
+    throw new Error("Invalid Update message: expected exactly 5 lines");
+  }
+  const parent = lines[1];
+  const accessor = decodeBase64NoPadUtf8(lines[2]);
+  const acknowledgeSink = lines[3];
+  const { value, name } = decodeParameterLine(lines[4]);
+  if (name !== undefined) {
+    throw new Error("Invalid Update message: named parameter is not allowed");
+  }
+  return new UpdateMessage({ parent, accessor, acknowledgeSink, value });
+}
+
 function parseSend(lines: string[]): SendMessage {
   // S\n<reference uuid>\n<param>
   if (lines.length !== 3) {
@@ -346,6 +417,14 @@ function parseSend(lines: string[]): SendMessage {
     throw new Error("Invalid Send message: named parameter is not allowed");
   }
   return new SendMessage({ reference, value });
+}
+
+function parseAcknowledge(lines: string[]): AcknowledgeMessage {
+  if (lines.length !== 2) {
+    throw new Error("Invalid Acknowledge message: expected exactly 2 lines");
+  }
+  const reference = lines[1];
+  return new AcknowledgeMessage({ reference });
 }
 
 function parseError(lines: string[]): ErrorMessage {

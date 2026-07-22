@@ -1,4 +1,5 @@
 import {
+  AcknowledgeMessage,
   Bridge,
   Message,
   Parameter,
@@ -8,35 +9,27 @@ import { Point, takes_point, trim_whitespace } from "./library/index.ts";
 
 const instanceRegistry = new Map<string, unknown>();
 
+function resolveParameterValue(param: Parameter): unknown {
+  if (param.kind === "reference") {
+    const instance = instanceRegistry.get(param.value);
+    if (instance === undefined) {
+      throw new Error(`Instance ${param.value} not found`);
+    }
+    return instance;
+  }
+  return param.value;
+}
+
 export function dispatchMessage(
   message: Message,
   bridge: Bridge,
 ) {
   message.match({
     call(message) {
-      const positionalParameters = message.positionalParameters.map((param) => {
-        if (param.kind === "reference") {
-          const instance = instanceRegistry.get(param.value);
-          if (instance === undefined) {
-            throw new Error(`Instance ${param.value} not found`);
-          }
-          return instance;
-        }
-        return param.value;
-      });
+      const positionalParameters = message.positionalParameters.map(resolveParameterValue);
       const namedParameters = new Map<string, unknown>();
       for (const [key, param] of message.namedParameters.entries()) {
-        let value: unknown;
-        if (param.kind === "reference") {
-          const instance = instanceRegistry.get(param.value);
-          if (instance === undefined) {
-            throw new Error(`Instance ${param.value} not found`);
-          }
-          value = instance;
-        } else {
-          value = param.value;
-        }
-        namedParameters.set(key, value);
+        namedParameters.set(key, resolveParameterValue(param));
       }
       const result = dispatchFunction(
         message.modulePath,
@@ -56,29 +49,10 @@ export function dispatchMessage(
       if (instance === undefined) {
         throw new Error(`Instance ${message.calledReference} not found`);
       }
-      const positionalParameters = message.positionalParameters.map((param) => {
-        if (param.kind === "reference") {
-          const instance = instanceRegistry.get(param.value);
-          if (instance === undefined) {
-            throw new Error(`Instance ${param.value} not found`);
-          }
-          return instance;
-        }
-        return param.value;
-      });
+      const positionalParameters = message.positionalParameters.map(resolveParameterValue);
       const namedParameters = new Map<string, unknown>();
       for (const [key, param] of message.namedParameters.entries()) {
-        let value: unknown;
-        if (param.kind === "reference") {
-          const instance = instanceRegistry.get(param.value);
-          if (instance === undefined) {
-            throw new Error(`Instance ${param.value} not found`);
-          }
-          value = instance;
-        } else {
-          value = param.value;
-        }
-        namedParameters.set(key, value);
+        namedParameters.set(key, resolveParameterValue(param));
       }
       const result = dispatchMethod(
         instance,
@@ -91,6 +65,17 @@ export function dispatchMessage(
         value: result,
       });
       bridge.send(response);
+    },
+    update(message) {
+      const instance = instanceRegistry.get(message.parent);
+      if (instance === undefined) {
+        throw new Error(`Instance ${message.parent} not found`);
+      }
+      if (instance === null || typeof instance !== "object") {
+        throw new Error(`Invalid instance for update ${message.accessor}`);
+      }
+      (instance as Record<string, unknown>)[message.accessor] = resolveParameterValue(message.value);
+      bridge.send(new AcknowledgeMessage({ reference: message.acknowledgeSink }));
     },
     request(message) {
       const instance = instanceRegistry.get(message.parent);
