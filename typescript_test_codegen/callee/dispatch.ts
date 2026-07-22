@@ -92,6 +92,12 @@ export function dispatchMessage(
       });
       bridge.send(response);
     },
+    send(_message) {
+      console.warn("The callee cannot handle incoming send messages.")
+    },
+    error(_message) {
+      console.warn("The callee cannot handle incoming error messages.")
+    },
     drop(message) {
       instanceRegistry.delete(message.reference);
     },
