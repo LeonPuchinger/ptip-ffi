@@ -4,7 +4,7 @@ import {
   Parameter,
   SendMessage,
 } from "./bridge.ts";
-import { takes_point, trim_whitespace } from "./library/index.ts";
+import { Point, takes_point, trim_whitespace } from "./library/index.ts";
 
 const instanceRegistry = new Map<string, unknown>();
 
@@ -41,6 +41,7 @@ export function dispatchMessage(
       const result = dispatchFunction(
         message.modulePath,
         message.callee,
+        message.returnSink,
         positionalParameters,
         namedParameters
       );
@@ -100,6 +101,7 @@ export function dispatchMessage(
 export function dispatchFunction(
   modulePath: string,
   callee: { kind: "function"; name: string } | { kind: "staticMethod"; typeName: string; methodName: string },
+  returnSink: string,
   positionalParameters: unknown[],
   namedParameters: Map<string, unknown> = new Map(),
 ): Parameter {
@@ -108,6 +110,14 @@ export function dispatchFunction(
       switch (modulePath) {
         case "": {
           switch (callee.name) {
+            case "Point": {
+              const result = new Point(
+                positionalParameters[0] as number,
+                positionalParameters[1] as number,
+              );
+              instanceRegistry.set(returnSink, result);
+              return { kind: "reference", value: returnSink };
+            }
             case "trim_whitespace": {
               const result = trim_whitespace(positionalParameters[0] as string);
               return { kind: "string", value: result };
