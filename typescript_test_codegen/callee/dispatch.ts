@@ -92,6 +92,15 @@ export function dispatchMessage(
       });
       bridge.send(response);
     },
+    request(message) {
+      const instance = instanceRegistry.get(message.parent);
+      const result = handleRequest(instance, message.accessor);
+      const response = new SendMessage({
+        reference: message.valueSink,
+        value: result,
+      });
+      bridge.send(response);
+    },
     send(_message) {
       console.warn("The callee cannot handle incoming send messages.")
     },
@@ -183,4 +192,34 @@ function dispatchMethod(
     return { kind: "reference", value: newReference };
   }
   throw new Error(`Unsupported method return value for ${methodName}`);
+}
+
+function handleRequest(
+  parent: unknown,
+  accessor: string,
+): Parameter {
+  if (parent === null || typeof parent !== "object") {
+    throw new Error(`Invalid parent for request ${accessor}`);
+  }
+  const value = (parent as Record<string, unknown>)[accessor];
+  if (typeof value === "string") {
+    return { kind: "string", value: value };
+  }
+  if (typeof value === "number") {
+    return { kind: "float", value: value };
+  }
+  if (typeof value === "boolean") {
+    return { kind: "boolean", value: value };
+  }
+  if (typeof value === "object" && value !== null) {
+    for (const [ref, obj] of instanceRegistry.entries()) {
+      if (obj === value) {
+        return { kind: "reference", value: ref };
+      }
+    }
+    const newReference = crypto.randomUUID();
+    instanceRegistry.set(newReference, value);
+    return { kind: "reference", value: newReference };
+  }
+  throw new Error(`Unsupported request value for ${accessor}`);
 }
