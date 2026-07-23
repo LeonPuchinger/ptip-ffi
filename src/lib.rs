@@ -1,5 +1,6 @@
 use crate::{config::LanguageConfig, error::PTIPFFIError};
 
+mod codegen;
 mod config;
 mod error;
 mod features;
