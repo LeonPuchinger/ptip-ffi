@@ -1,5 +1,14 @@
-import { AcknowledgeMessage, CallMessage, ErrorMessage, MethodMessage, RequestMessage, SendMessage, UpdateMessage } from "./ffi/bridge.ts";
+import { AcknowledgeMessage, CallMessage, DropMessage, ErrorMessage, MethodMessage, RequestMessage, SendMessage, UpdateMessage } from "./ffi/bridge.ts";
 import { establishBridge } from "./ffi/main.ts";
+
+const finalizationRegistry = new FinalizationRegistry((uuid: string) => {
+    const bridge = establishBridge();
+    bridge.send(
+        new DropMessage({
+            reference: uuid,
+        })
+    );
+});
 
 export function trim_whitespace(str: string): string {
     const returnSink = crypto.randomUUID();
@@ -77,6 +86,7 @@ export class Point {
         } else {
             throw new Error(`Unexpected message kind: ${response.kind}`);
         }
+        finalizationRegistry.register(this, this.uuid);
     }
 
     get x(): number {
