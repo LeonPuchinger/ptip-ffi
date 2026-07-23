@@ -6,17 +6,25 @@ const NAME_PATTERN: &str = r"[A-Za-z_][A-Za-z0-9_]*";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TemplateError {
+    /// Returned when a template pattern does not contain exactly one named token.
     InvalidPattern,
 }
 
+/// Replaces named placeholders in input text based on a configurable pattern.
 pub struct TemplateEngine {
     placeholder_regex: Regex,
 }
 
 impl TemplateEngine {
+    /// Builds a template engine from a named placeholder pattern.
+    ///
+    /// The pattern must contain exactly one alphanumeric sequence of text referred to as the "name token".
+    /// The name token is used to identify placeholders in the input text. The name token must match the regex `[A-Za-z_][A-Za-z0-9_]*`.
+    /// The pattern can contain any other characters, which will be treated as literal text.
+    /// For example, the pattern `${name}` has a name token of `name`, and the pattern `{{example}}` has a name token of `example`.
+    /// The pattern `prefix_${some}_suffix` has a name token of `some`, with literal text before and after it.
     pub fn new(pattern: &str) -> Result<Self, TemplateError> {
-        let token_regex =
-            Regex::new(NAME_PATTERN).expect("failed to compile internal token regex");
+        let token_regex = Regex::new(NAME_PATTERN).expect("failed to compile internal token regex");
 
         let mut matches = token_regex.find_iter(pattern);
         let token = matches.next().ok_or(TemplateError::InvalidPattern)?;
@@ -39,6 +47,9 @@ impl TemplateEngine {
         Ok(Self { placeholder_regex })
     }
 
+    /// Renders `input` by replacing placeholders whose keys exist in `values`.
+    ///
+    /// Placeholders with missing keys are left unchanged.
     pub fn render(&self, input: &str, values: &HashMap<&str, &str>) -> String {
         self.placeholder_regex
             .replace_all(input, |caps: &regex::Captures<'_>| {
