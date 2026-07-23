@@ -3,6 +3,7 @@
   "description": "Imagining what the output of ptip-ffi codegen could look like",
   "version": "0.0.1",
   "main": "main.ts",
+  "type": "module",
   "devDependencies": {
 
   },

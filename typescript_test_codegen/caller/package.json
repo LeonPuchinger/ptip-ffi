@@ -3,10 +3,9 @@
   "description": "Imagining what the output of ptip-ffi codegen could look like",
   "version": "0.0.1",
   "main": "index.ts",
-  "devDependencies": {
-
-  },
+  "type": "module",
   "dependencies": {
+    "sync-child-process": "^1.0.2",
     "synchronous-socket": "github:leonpuchinger/synchronous-socket#feat-n-api"
   }
 }
