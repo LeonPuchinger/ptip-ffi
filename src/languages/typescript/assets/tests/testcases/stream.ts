@@ -1,4 +1,4 @@
-import type { SynchronousStream } from "../socket.ts";
+import type { SynchronousStream } from "../../socket.ts";
 
 type Bytes = Uint8Array<ArrayBufferLike>;
 

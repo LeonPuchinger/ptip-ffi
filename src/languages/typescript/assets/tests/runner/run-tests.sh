@@ -1,7 +1,7 @@
 #!/bin/sh
 set -eu
 
-test_files=${TEST_FILES:-./*_test.ts}
+test_files=${TEST_FILES:-./testcases/*_test.ts}
 
 if [ -z "${TESTCASES:-}" ]; then
   exec node --import=tsx --test ${test_files}

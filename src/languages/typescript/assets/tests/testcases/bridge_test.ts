@@ -12,8 +12,8 @@ import {
     UpdateMessage,
     type Message,
     type Parameter,
-} from "../bridge.ts";
-import { MessageSocket } from "../socket.ts";
+} from "../../bridge.ts";
+import { MessageSocket } from "../../socket.ts";
 import { MemoryDuplexStream } from "./stream.ts";
 
 function roundTrip(message: Message): Message {

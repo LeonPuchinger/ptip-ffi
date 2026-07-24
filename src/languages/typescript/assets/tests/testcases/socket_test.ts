@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { MessageSocket } from "../socket.ts";
+import { MessageSocket } from "../../socket.ts";
 import { MemoryDuplexStream } from "./stream.ts";
 
 test("MessageSocket: sendText/receiveText roundtrip", () => {

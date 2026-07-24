@@ -6,13 +6,13 @@ RUN apt-get update \
 
 WORKDIR /opt/ptip-ffi-tests
 
-COPY tests/package.json ./package.json
-COPY tests/vendor ./vendor
+COPY runner/package.json ./package.json
+COPY runner/vendor ./vendor
 
 RUN npm install --no-audit --no-fund
 
-COPY tests/entrypoint.sh /usr/local/bin/ptip-ffi-tests-entrypoint
-COPY tests/run-tests.sh /usr/local/bin/ptip-ffi-tests-runner
+COPY runner/entrypoint.sh /usr/local/bin/ptip-ffi-tests-entrypoint
+COPY runner/run-tests.sh /usr/local/bin/ptip-ffi-tests-runner
 RUN chmod +x /usr/local/bin/ptip-ffi-tests-entrypoint /usr/local/bin/ptip-ffi-tests-runner
 
 WORKDIR /assets/tests

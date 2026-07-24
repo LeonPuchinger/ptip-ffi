@@ -19,8 +19,7 @@ test:
 	@# Convert make variables to shell variables
 	TEST_FILES="$(TEST_FILES)"
 	TESTCASES="$(TESTCASES)"
-	export TEST_FILES TESTCASES
-	docker build -t "$(DOCKER_IMAGE)" -f "$(HOST_TEST_DIR)/Dockerfile" "$(HOST_ASSETS_DIR)" >/dev/null; \
+	docker build -t "$(DOCKER_IMAGE)" -f "$(HOST_TEST_DIR)/runner/Dockerfile" "$(HOST_TEST_DIR)" >/dev/null; \
 	docker run --rm -t \
 		-e TEST_FILES="$$TEST_FILES" \
 		-e TESTCASES="$$TESTCASES" \
