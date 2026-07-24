@@ -6,6 +6,6 @@
   },
   "dependencies": {
     "sync-child-process": "^1.0.2",
-    "synchronous-socket": "github:leonpuchinger/synchronous-socket#feat-n-api"
+    "synchronous-socket": "file:./vendor/synchronous-socket"
   }
 }

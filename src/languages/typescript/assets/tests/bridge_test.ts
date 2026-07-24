@@ -1,45 +1,43 @@
+import assert from "node:assert/strict";
+import test from "node:test";
 import {
-    assertEquals,
-    assertRejects,
-    assertThrows,
-} from "jsr:@std/assert@1.0.19";
-import {
-    CallMessage,
+    AcknowledgeMessage,
     Bridge,
+    CallMessage,
+    DropMessage,
     ErrorMessage,
+    MethodMessage,
     RequestMessage,
     SendMessage,
+    UpdateMessage,
+    type Message,
+    type Parameter,
 } from "../bridge.ts";
 import { MessageSocket } from "../socket.ts";
 import { MemoryDuplexStream } from "./stream.ts";
 
-function deferred<T>() {
-    let resolve!: (value: T) => void;
-    let reject!: (reason?: unknown) => void;
-    const promise = new Promise<T>((res, rej) => {
-        resolve = res;
-        reject = rej;
-    });
-    return { promise, resolve, reject };
+function roundTrip(message: Message): Message {
+    const [a, b] = MemoryDuplexStream.pair();
+    const sender = new Bridge(new MessageSocket(a));
+    const receiver = new Bridge(new MessageSocket(b));
+
+    sender.send(message);
+    const parsed = receiver.nextMessage();
+    assert.ok(parsed);
+    assert.equal(parsed.kind, message.kind);
+    return parsed;
 }
 
-Deno.test("Bridge: CallMessage roundtrip (positional + named)", async () => {
-    const [a, b] = MemoryDuplexStream.pair();
-    const commA = new Bridge(new MessageSocket(a));
-    const commB = new Bridge(new MessageSocket(b));
+test("Bridge: round-trips CallMessage with positional and named parameters", () => {
+    const named = new Map<string, Parameter>([
+        ["x", { kind: "integer", value: 255 }],
+        ["title", { kind: "string", value: "Hello ü" }],
+    ]);
 
-    const got = deferred<CallMessage>();
-    commB.onCall((m) => got.resolve(m));
-
-    const runB = commB.run();
-
-    const named = new Map();
-    named.set("x", { kind: "integer", value: 255 });
-    named.set("title", { kind: "string", value: "Hello ü" });
-
-    await commA.send(
+    const parsed = roundTrip(
         new CallMessage({
-            invocationPath: "foo.bar/baz",
+            modulePath: "foo/bar",
+            callee: { kind: "function", name: "sum" },
             returnSink: "return-uuid",
             positional: [
                 { kind: "integer", value: -1 },
@@ -50,153 +48,111 @@ Deno.test("Bridge: CallMessage roundtrip (positional + named)", async () => {
             ],
             named,
         }),
-    );
+    ) as CallMessage;
 
-    const m = await got.promise;
-    assertEquals(m.invocationPath, "foo.bar/baz");
-    assertEquals(m.returnSink, "return-uuid");
-    assertEquals(m.positionalParameters, [
+    assert.equal(parsed.modulePath, "foo/bar");
+    assert.deepEqual(parsed.callee, { kind: "function", name: "sum" });
+    assert.equal(parsed.returnSink, "return-uuid");
+    assert.deepEqual(parsed.positionalParameters, [
         { kind: "integer", value: -1 },
         { kind: "float", value: 3.5 },
         { kind: "boolean", value: true },
         { kind: "string", value: "hi" },
         { kind: "reference", value: "ref-uuid" },
     ]);
-    assertEquals(m.namedParameters.get("x"), { kind: "integer", value: 255 });
-    assertEquals(m.namedParameters.get("title"), {
+    assert.deepEqual(parsed.namedParameters.get("x"), { kind: "integer", value: 255 });
+    assert.deepEqual(parsed.namedParameters.get("title"), {
         kind: "string",
         value: "Hello ü",
     });
-
-    // Shutdown the run loop cleanly.
-    commA.close();
-    await runB;
 });
 
-Deno.test("Bridge: Request/Send/Error message roundtrips", async () => {
-    const [a, b] = MemoryDuplexStream.pair();
-    const commA = new Bridge(new MessageSocket(a));
-    const commB = new Bridge(new MessageSocket(b));
-
-    const gotRequest = deferred<RequestMessage>();
-    const gotSend = deferred<SendMessage>();
-    const gotError = deferred<ErrorMessage>();
-    commB.onRequest((m) => gotRequest.resolve(m));
-    commB.onSend((m) => gotSend.resolve(m));
-    commB.onError((m) => gotError.resolve(m));
-
-    const runB = commB.run();
-
-    await commA.send(
-        new RequestMessage({
-            parent: "p",
-            accessor: "field.name",
-            valueSink: "v",
+test("Bridge: round-trips static method calls", () => {
+    const parsed = roundTrip(
+        new CallMessage({
+            modulePath: "pkg/util",
+            callee: { kind: "staticMethod", typeName: "Widget", methodName: "create" },
+            returnSink: "sink",
         }),
-    );
-    await commA.send(
-        new SendMessage({
-            reference: "r",
+    ) as CallMessage;
+
+    assert.deepEqual(parsed.callee, {
+        kind: "staticMethod",
+        typeName: "Widget",
+        methodName: "create",
+    });
+});
+
+test("Bridge: round-trips the remaining message kinds", () => {
+    const messages: Message[] = [
+        new MethodMessage({
+            calledReference: "ref-1",
+            methodName: "doThing",
+            returnSink: "sink-1",
+            positional: [{ kind: "integer", value: 42 }],
+            named: new Map<string, Parameter>([["label", { kind: "string", value: "ready" }]]),
+        }),
+        new RequestMessage({
+            parent: "parent-1",
+            accessor: "field.name",
+            valueSink: "value-1",
+        }),
+        new UpdateMessage({
+            parent: "parent-1",
+            accessor: "field.name",
+            acknowledgeSink: "ack-1",
             value: { kind: "boolean", value: false },
         }),
-    );
-    await commA.send(
+        new SendMessage({
+            reference: "ref-2",
+            value: { kind: "string", value: "payload" },
+        }),
+        new AcknowledgeMessage({ reference: "ref-2" }),
         new ErrorMessage({
-            reference: "r",
+            reference: "ref-2",
             error: { kind: "string", value: "boom" },
         }),
-    );
+        new DropMessage({ reference: "ref-2" }),
+    ];
 
-    const r = await gotRequest.promise;
-    assertEquals(r.parent, "p");
-    assertEquals(r.accessor, "field.name");
-    assertEquals(r.valueSink, "v");
-
-    const s = await gotSend.promise;
-    assertEquals(s.reference, "r");
-    assertEquals(s.value, { kind: "boolean", value: false });
-
-    const e = await gotError.promise;
-    assertEquals(e.reference, "r");
-    assertEquals(e.error, { kind: "string", value: "boom" });
-
-    commA.close();
-    await runB;
-});
-
-Deno.test("Bridge: handler errors are non-fatal", async () => {
     const [a, b] = MemoryDuplexStream.pair();
-    const commA = new Bridge(new MessageSocket(a));
-    const commB = new Bridge(new MessageSocket(b));
+    const sender = new Bridge(new MessageSocket(a));
+    const receiver = new Bridge(new MessageSocket(b));
 
-    const originalConsoleError = console.error;
-    console.error = () => {};
-    try {
-        const called = deferred<void>();
-        commB.onSend(() => {
-            throw new Error("handler boom");
-        });
-        commB.onSend(() => {
-            called.resolve();
-        });
-
-        const runB = commB.run();
-        await commA.send(
-            new SendMessage({
-                reference: "r",
-                value: { kind: "integer", value: 1 },
-            }),
-        );
-        await called.promise;
-
-        commA.close();
-        await runB;
-    } finally {
-        console.error = originalConsoleError;
+    for (const message of messages) {
+        sender.send(message);
+        const parsed = receiver.nextMessage();
+        assert.ok(parsed);
+        assert.equal(parsed.kind, message.kind);
+        assert.deepEqual(parsed, message);
     }
 });
 
-Deno.test("Bridge: run() is not re-entrant", async () => {
+test("Bridge: nextMessage returns null on EOF", () => {
     const [a, b] = MemoryDuplexStream.pair();
-    const commB = new Bridge(new MessageSocket(b));
-    const run1 = commB.run();
-
-    await assertRejects(
-        () => commB.run(),
-        Error,
-        "already running",
-    );
-
-    // End run1 by closing the remote side.
     a.close();
-    await run1;
+    const bridge = new Bridge(new MessageSocket(b));
+    assert.equal(bridge.nextMessage(), null);
 });
 
-Deno.test("Bridge: invalid message kind rejects run() and allows restart", async () => {
+test("Bridge: invalid message kind throws", () => {
     const [a, b] = MemoryDuplexStream.pair();
-    const sockA = new MessageSocket(a);
-    const commB = new Bridge(new MessageSocket(b));
+    const socket = new MessageSocket(a);
+    const bridge = new Bridge(new MessageSocket(b));
 
-    const run1 = commB.run();
-    await sockA.sendText("X");
-    await assertRejects(() => run1, Error, "Invalid message kind");
-
-    // After failure, run() should be callable again.
-    const run2 = commB.run();
-    a.close();
-    await run2;
+    socket.sendText("X");
+    assert.throws(() => bridge.nextMessage(), /Invalid message kind/);
 });
 
-Deno.test("Bridge: serialize() rejects CR/LF in fields", () => {
-    assertThrows(
+test("Bridge: serialize rejects CR/LF in fields", () => {
+    assert.throws(
         () => {
-            // invocationPath is checked for CR/LF.
             new CallMessage({
-                invocationPath: "bad\npath",
+                modulePath: "bad\npath",
+                callee: { kind: "function", name: "sum" },
                 returnSink: "r",
             }).serialize();
         },
-        Error,
-        "contains newline",
+        /contains newline/,
     );
 });
