@@ -7,7 +7,7 @@ RUN apt-get update \
 WORKDIR /opt/ptip-ffi-tests
 
 COPY runner/package.json ./package.json
-COPY runner/vendor ./vendor
+COPY runner/package-lock.json ./package-lock.json
 
 RUN npm install --no-audit --no-fund
 
