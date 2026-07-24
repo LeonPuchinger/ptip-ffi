@@ -18,12 +18,12 @@ Netstrings use the following format: `<len>:<msg>,`.
 Each message is made up of a message kind and different components, depending on the kind.
 The kind is situated at the beginning of the message.
 The message kind and the components are separated by newlines.
-Currently, there are four kinds of messages: Call (C), Request (R), Send (S), and Error (E), which are described in the following sections.
+Currently, there are eight kinds of messages: Call (C), Method Call (M), Request (R), Update (U), Send (S), Acknowledge (A), Error (E), and Drop (D), which are described in the following sections.
 The messages are kept concise intentionally (e.g. by using abbreviations) to reduce communication and parsing overhead.
 
 ### Call
 
-The "Call" (C) message is used to invoke functions or methods on the other side of the FFI and has the following schema:
+The "Call" (C) message is used to invoke functions or static methods on the other side of the FFI and has the following schema:
 
 ```
 C
@@ -34,13 +34,13 @@ C
 
 The individual components are defined as follows:
 
-- invocation path: A base64 encoded path to the function or method in the module system of the library. The individual components of the path are separated by dots in the unencoded version. If the path is referring to a method, the last component of the path is the name of the method, separated by a colon.
+- invocation path: A path to the function or static method in the module system of the library. Each component of the path is encoded as base64, however, the separators between the components are not. The first part of the invocation path is the module path, indicating where in the module system the called upon function or method is located. Each component of the module path is separated by a forward slash (`/`). If the called function is a top-level function (meaning in the entry-point module of the library), the module path is omitted and no separation character to the next part is necessary. If the invocation path points to a function, the module path is followed by the name of the function, separated by a single dot (`.`). If the invocation path refers to a static method, the module path is followed by the name of the type that contains the method, separated by a single colon (`:`). The name of the static method is separated from the type with a hastag character (`#`).
 - return value sink: A uuid that the callee can use as a reference to send the return value to using a "Send" (S) message. If the invocated function or method does not have a return value, the sink still needs to be set so the other side has a chance to receive a potential error value.
 - parameters: A newline separated list of the parameters passed to the function or method. Refer to [the section on parameters](#parameters) for more information.
 
 Example:
 
-The following message calls the method `some` on value `bar` located in module `foo`.
+The following message calls the static method `some` on type `Bar` located in module `foo`.
 The method has two parameters, with the first one being an integer of value `-42` and the second one being a reference to the object with the UUID `"dd1835c3-24ee-44df-b867-71c136e058ca"`.
 The return value is supposed to be sent back with the reference `"352b6376-fff5-4dfa-8337-c85f175c349d"` attached as its sink.
 
@@ -48,7 +48,7 @@ Unencoded (just for demonstration purposes, real messages are always encoded):
 
 ```
 C
-foo.bar:some
+foo:Bar#some
 352b6376-fff5-4dfa-8337-c85f175c349d
 i-42
 rdd1835c3-24ee-44df-b867-71c136e058ca
@@ -58,7 +58,54 @@ Encoded:
 
 ```
 C
-Zm9vLmJhcjpzb21l
+Zm9v:QmFy#c29tZQ==
+352b6376-fff5-4dfa-8337-c85f175c349d
+i-2a
+rdd1835c3-24ee-44df-b867-71c136e058ca
+```
+
+### Method Call
+
+The "Method Call" (M) message has a similar intent and design compared to the "Call" (C) message.
+It is used to invoke methods on instances allocated the other side of the FFI and has the following schema:
+
+```
+M
+<called reference>
+<method name>
+<return value sink>
+<parameters>
+```
+
+The individual components are defined as follows:
+
+- called reference: A uuid reference to the object on which the method is called.
+- method name: A base64 encoded name of the method called on the object.
+- return value sink/parameters: analog to the "Call" (C) message.
+
+Example:
+
+The following message calls the method `some` on the reference `"6b5e688b-22cf-40b4-a01a-ae705b3726cb"`.
+The method has two parameters, with the first one being an integer of value `-42` and the second one being a reference to the object with the UUID `"dd1835c3-24ee-44df-b867-71c136e058ca"`.
+The return value is supposed to be sent back with the reference `"352b6376-fff5-4dfa-8337-c85f175c349d"` attached as its sink.
+
+Unencoded (just for demonstration purposes, real messages are always encoded):
+
+```
+M
+6b5e688b-22cf-40b4-a01a-ae705b3726cb
+some
+352b6376-fff5-4dfa-8337-c85f175c349d
+i-42
+rdd1835c3-24ee-44df-b867-71c136e058ca
+```
+
+Encoded:
+
+```
+M
+6b5e688b-22cf-40b4-a01a-ae705b3726cb
+c29tZQ==
 352b6376-fff5-4dfa-8337-c85f175c349d
 i-2a
 rdd1835c3-24ee-44df-b867-71c136e058ca
@@ -78,12 +125,12 @@ R
 The individual components are defined as follows:
 
 - parent reference: A UUID that marks the object on which the attribute is accessed.
-- accessor: A base64 encoded attribute that is accessed on the parent.
+- accessor: A base64 encoded attribute name that is accessed on the parent.
 - value sink: A UUID used as a reference in the "Send" message that returns the requested value.
 
 Example:
 
-The following requests the attribute `foo` on the object referred to by `"dd1835c3-24ee-44df-b867-71c136e058ca"`. Further, the sink `"f0b80bf1-9b5a-449f-b2b5-fa07f57c5287"` is specified to allow the sender to identify the returned value via a "Send" message.
+The following messsage requests the attribute `foo` on the object referred to by `"dd1835c3-24ee-44df-b867-71c136e058ca"`. Further, the sink `"f0b80bf1-9b5a-449f-b2b5-fa07f57c5287"` is specified to allow the sender to identify the returned value via a "Send" message.
 
 Unencoded (just for demonstration purposes, real messages are always encoded):
 
@@ -103,9 +150,52 @@ Zm9v
 f0b80bf1-9b5a-449f-b2b5-fa07f57c5287
 ```
 
+### Update
+
+The "Update" (U) message is used to update attributes of objects and has the following schema:
+
+```
+U
+<parent reference>
+<accessor>
+<acknowledge sink>
+<parameter>
+```
+
+The individual components are defined as follows:
+
+- parent reference: A UUID that marks the object on which the attribute is updated.
+- accessor: A base64 encoded attribute name that is updated on the parent.
+- value sink: A UUID used as a reference in the "Send" message that returns the requested value.
+- parameter: A single parameter that serves as the value to be written to the attribute. Only a positional parameter is supposed to be used here.
+
+Example:
+
+The following message updates the attribute `foo` on the object referred to by `"dd1835c3-24ee-44df-b867-71c136e058ca"`. Further, the sink `"f0b80bf1-9b5a-449f-b2b5-fa07f57c5287"` is specified to allow the sender to receive confiramtion of a successful update via an "Acknowledge" message.
+
+Unencoded (just for demonstration purposes, real messages are always encoded):
+
+```
+U
+dd1835c3-24ee-44df-b867-71c136e058ca
+foo
+f0b80bf1-9b5a-449f-b2b5-fa07f57c5287
+i42
+```
+
+Encoded:
+
+```
+U
+dd1835c3-24ee-44df-b867-71c136e058ca
+Zm9v
+f0b80bf1-9b5a-449f-b2b5-fa07f57c5287
+i2a
+```
+
 ### Send
 
-The "Send" (S) message is used to send values, usually as a response to a "Request" call or to transport a return value of a "Call" invocation.
+The "Send" (S) message is used to send values, usually as a response to a "Request" call or to transport a return value of a "Call" or "Method" invocation.
 It has the following schema:
 
 ```
@@ -116,8 +206,8 @@ S
 
 The individual components are defined as follows:
 
-- reference: The UUID address that was previously agreed upon as the sink for the "Send" message, for instance by a "Request" or "Call" message.
-- A single parameter that serves as the transferred value. Only a positional parameter is supposed to be used here.
+- reference: The UUID address that was previously agreed upon as the sink for the "Send" message, for instance by a "Request", "Call", or similar message.
+- parameter: A single parameter that serves as the transferred value. Only a positional parameter is supposed to be used here.
 
 Example:
 
@@ -153,6 +243,55 @@ The following "Error" message returns an error object to the sink `"dd1835c3-24e
 E
 dd1835c3-24ee-44df-b867-71c136e058ca
 r02e4a529-ea4c-4d70-b718-d8db2b883880
+```
+
+### Acknowledge
+
+The "Acknowledge" (A) message is used as a confirmation after a successful operation, such as an attribute update.
+In contrast to the "Send" or "Error" messages, "Acknowledge" does not carry a value.
+It has the following schema:
+
+```
+A
+<reference>
+```
+
+The individual components are defined as follows:
+
+- reference: The UUID address that was previously agreed upon as the sink for the "Acknowledge" message in the "Call" message. Instead of the return value, the error value is sent to the same sink.
+
+Example:
+
+The following "Acknowledge" message confirms a previous and successful "Update" operation for the agreed-upon acknowledge sink `"dd1835c3-24ee-44df-b867-71c136e058ca"`:
+
+```
+A
+dd1835c3-24ee-44df-b867-71c136e058ca
+```
+
+### Drop
+
+The "Drop" (D) message is used to instruct the library side of the FFI to drop/discard a reference.
+In a GC-based langauge, this means that the references to that object should be removed.
+In a langauge using manual memory management, the object should be deallocated.
+It has the following schema:
+
+```
+D
+<reference>
+```
+
+The individual components are defined as follows:
+
+- reference: The UUID address of the object to free
+
+Example:
+
+The following "Drop" message instructs the library to dellocate the object with the UUID `"dd1835c3-24ee-44df-b867-71c136e058ca"`
+
+```
+D
+dd1835c3-24ee-44df-b867-71c136e058ca
 ```
 
 ## Parameters
