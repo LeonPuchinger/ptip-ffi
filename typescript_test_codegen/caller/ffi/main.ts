@@ -1,21 +1,14 @@
 import { SyncChildProcess } from "sync-child-process";
 import { Bridge } from "./bridge.ts";
 import { MessageSocket, SynchronousSocket } from "./socket.ts";
-import { runtimeEnvironment } from "./util.ts";
 
 let internal_bridge: Bridge;
-
-const environment = runtimeEnvironment();
 
 export function establishBridge(): Bridge {
     if (internal_bridge) return internal_bridge;
 
     // Read the command from the environment variable.
-    const invoke = environment === "deno"
-        ? Deno.env.get("FFI_LIBRARY_INVOKE")
-        : environment === "node"
-            ? process.env.FFI_LIBRARY_INVOKE
-            : undefined;
+    const invoke = process.env.FFI_LIBRARY_INVOKE;
 
     if (!invoke || invoke.trim() === "") {
         throw new Error("FFI_LIBRARY_INVOKE is not set");
