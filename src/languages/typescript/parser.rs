@@ -1,6 +1,7 @@
 use crate::{
     features::{
-        FunctionDefinition, Module, ModulePath, PrimitiveType, Type, TypePath, ValueParameter,
+        AnonymousCallable, FunctionDefinition, Module, ModulePath, PrimitiveType, Type, TypePath,
+        ValueParameter,
     },
     map,
     parser::{
@@ -68,10 +69,12 @@ fn keyworded_function_definition<'input>(
     exact("}")(lexer)?;
     Ok(FunctionDefinition {
         name,
-        positional_parameters: parameters,
-        named_parameters: Vec::new(),
-        return_type: Type::Dynamic,
-        type_parameters: Vec::new(),
+        callable: AnonymousCallable {
+            positional_parameters: parameters,
+            named_parameters: Vec::new(),
+            return_type: Type::Dynamic,
+            type_parameters: Vec::new(),
+        },
     })
 }
 

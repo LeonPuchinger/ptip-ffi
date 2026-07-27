@@ -74,7 +74,7 @@ pub struct TypeParameter {
 }
 
 #[derive(Clone)]
-pub struct Constructor {
+pub struct AnonymousCallable {
     pub positional_parameters: Vec<ValueParameter>,
     pub named_parameters: Vec<ValueParameter>,
     pub return_type: Type,
@@ -84,18 +84,15 @@ pub struct Constructor {
 #[derive(Clone)]
 pub struct Method {
     pub name: String,
-    pub positional_parameters: Vec<ValueParameter>,
-    pub named_parameters: Vec<ValueParameter>,
-    pub return_type: Type,
-    pub type_parameters: Vec<TypeParameter>,
     pub r#static: bool,
+    pub callable: AnonymousCallable,
 }
 
 #[derive(Clone)]
 pub struct TypeDefinition {
     pub name: String,
     pub properties: Vec<(String, Type)>,
-    pub default_constructor: Option<Constructor>,
+    pub default_constructor: Option<AnonymousCallable>,
     pub named_constructors: Vec<FunctionDefinition>,
     pub methods: Vec<Method>,
     pub static_methods: Vec<Method>,
@@ -115,8 +112,5 @@ pub struct ValueParameter {
 #[derive(Clone)]
 pub struct FunctionDefinition {
     pub name: String,
-    pub positional_parameters: Vec<ValueParameter>,
-    pub named_parameters: Vec<ValueParameter>,
-    pub return_type: Type,
-    pub type_parameters: Vec<TypeParameter>,
+    pub callable: AnonymousCallable,
 }
