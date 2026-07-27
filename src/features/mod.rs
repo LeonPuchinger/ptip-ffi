@@ -26,7 +26,6 @@ impl ModulePath {
 #[derive(Clone)]
 pub struct Module {
     pub path: ModulePath,
-    pub children: Vec<Module>,
     pub functions: Vec<FunctionDefinition>,
     pub types: Vec<TypeDefinition>,
 }
@@ -75,13 +74,31 @@ pub struct TypeParameter {
 }
 
 #[derive(Clone)]
+pub struct Constructor {
+    pub positional_parameters: Vec<ValueParameter>,
+    pub named_parameters: Vec<ValueParameter>,
+    pub return_type: Type,
+    pub type_parameters: Vec<TypeParameter>,
+}
+
+#[derive(Clone)]
+pub struct Method {
+    pub name: String,
+    pub positional_parameters: Vec<ValueParameter>,
+    pub named_parameters: Vec<ValueParameter>,
+    pub return_type: Type,
+    pub type_parameters: Vec<TypeParameter>,
+    pub r#static: bool,
+}
+
+#[derive(Clone)]
 pub struct TypeDefinition {
     pub name: String,
     pub properties: Vec<(String, Type)>,
-    pub default_constructor: Option<FunctionDefinition>,
+    pub default_constructor: Option<Constructor>,
     pub named_constructors: Vec<FunctionDefinition>,
-    pub methods: Vec<FunctionDefinition>,
-    pub static_methods: Vec<FunctionDefinition>,
+    pub methods: Vec<Method>,
+    pub static_methods: Vec<Method>,
     pub type_parameters: Vec<TypeParameter>,
     pub implements: Vec<TypePath>,
 }

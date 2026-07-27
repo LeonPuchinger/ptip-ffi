@@ -229,7 +229,6 @@ pub fn parse(input: &str) -> Result<Module, ParserError> {
             path: ModulePath {
                 segments: Vec::new(),
             },
-            children: Vec::new(),
             functions: Vec::new(),
             types: Vec::new(),
         },
