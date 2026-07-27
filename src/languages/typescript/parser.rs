@@ -1,5 +1,7 @@
 use crate::{
-    features::{Function, FunctionParameter, Module, PrimitiveType, Type},
+    features::{
+        FunctionDefinition, Module, ModulePath, PrimitiveType, Type, TypePath, ValueParameter,
+    },
     map,
     parser::{
         Parser, ParserError,
@@ -11,31 +13,33 @@ use crate::{
 
 fn function_parameter<'input>(
     lexer: &mut LazyStatefulLexer<'input>,
-) -> Result<FunctionParameter, ParserError> {
+) -> Result<ValueParameter, ParserError> {
     let parameter_name = token_kind("identifier")(lexer)?;
     let required = optional(exact("?"))(lexer)?.is_none();
     exact(":")(lexer)?;
     let parameter_type = optional(token_kind("identifier"))(lexer)?;
-    Ok(FunctionParameter {
+    Ok(ValueParameter {
         name: parameter_name,
         r#type: parameter_type
             .map(|type_name| match type_name.as_str() {
                 "number" => Type::Primitive(PrimitiveType::Number),
                 "string" => Type::Primitive(PrimitiveType::String),
                 "boolean" => Type::Primitive(PrimitiveType::Boolean),
-                _ => Type::Composite {
+                _ => Type::Composite(TypePath {
+                    module_path: ModulePath::empty(),
                     name: type_name,
-                    path: Vec::new(),
-                },
+                }),
             })
-            .unwrap_or(Type::Undefined),
+            .unwrap_or(Type::Dynamic),
         required,
+        variadic: false,
+        nullable: false,
     })
 }
 
 fn function_parameters<'input>(
     lexer: &mut LazyStatefulLexer<'input>,
-) -> Result<Vec<FunctionParameter>, ParserError> {
+) -> Result<Vec<ValueParameter>, ParserError> {
     let mut params = Vec::new();
     lexer.push_state("parameters")?;
     loop {
@@ -54,7 +58,7 @@ fn function_parameters<'input>(
 
 fn keyworded_function_definition<'input>(
     lexer: &mut LazyStatefulLexer<'input>,
-) -> Result<Function, ParserError> {
+) -> Result<FunctionDefinition, ParserError> {
     exact("function")(lexer)?;
     let name = token_kind("identifier")(lexer)?;
     exact("(")(lexer)?;
@@ -62,11 +66,12 @@ fn keyworded_function_definition<'input>(
     exact(")")(lexer)?;
     exact("{")(lexer)?;
     exact("}")(lexer)?;
-    Ok(Function {
+    Ok(FunctionDefinition {
         name,
         positional_parameters: parameters,
         named_parameters: Vec::new(),
-        return_type: Type::Undefined,
+        return_type: Type::Dynamic,
+        type_parameters: Vec::new(),
     })
 }
 
@@ -221,7 +226,9 @@ pub fn parse(input: &str) -> Result<Module, ParserError> {
     )?;
     let module = parse_at_anchors(
         Module {
-            name: String::new(),
+            path: ModulePath {
+                segments: Vec::new(),
+            },
             children: Vec::new(),
             functions: Vec::new(),
             types: Vec::new(),
@@ -229,9 +236,9 @@ pub fn parse(input: &str) -> Result<Module, ParserError> {
         map! {
             AnchorLocation::Exact { token_kind: "keyword", text: "function" } => AnchorRule {
                 parsers: vec![
-                    Box::new(keyworded_function_definition) as Parser<LazyStatefulLexer<'_>, Function>,
+                    Box::new(keyworded_function_definition) as Parser<LazyStatefulLexer<'_>, FunctionDefinition>,
                 ],
-                reducer: Box::new(|mut module: Module, function: Function| {
+                reducer: Box::new(|mut module: Module, function: FunctionDefinition| {
                     module.functions.push(function);
                     module
                 }),
