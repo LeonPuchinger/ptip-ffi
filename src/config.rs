@@ -1,6 +1,6 @@
-use crate::{features::LanguageFeature, parser::ParserError};
+use crate::{features::Module, parser::ParserError};
 
 pub struct LanguageConfig {
     pub name: &'static str,
-    pub parse: for<'a> fn(&'a str) -> Result<Vec<LanguageFeature>, ParserError>,
+    pub parse: for<'a> fn(&'a str) -> Result<Module, ParserError>,
 }
