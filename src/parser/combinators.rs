@@ -127,7 +127,7 @@ where
 {
     Box::new(move |lexer: &mut L| {
         let mut accumulator = initial.clone();
-        let mut pending_consecutive: Option<PendingConsecutive<'anchor, 'input>> = None;
+        let mut pending_consecutive: Vec<PendingConsecutive<'anchor, 'input>> = Vec::new();
         'anchor: loop {
             let next = match lexer.peek() {
                 Ok(token) => token,
@@ -141,7 +141,7 @@ where
                 })
                 .or_else(|| anchors.get(&AnchorLocation::Kind(next.kind)))
             {
-                pending_consecutive = None;
+                pending_consecutive.clear();
                 let before_anchor = lexer.snapshot();
                 if let Some(updated_accumulator) =
                     try_rule(lexer, rule, &before_anchor, &next, accumulator.clone())?
@@ -150,112 +150,130 @@ where
                     continue 'anchor;
                 }
             }
-
+            if !pending_consecutive.is_empty() {
+                let mut exact_matches: Vec<PendingConsecutive<'anchor, 'input>> = Vec::new();
+                let mut kind_matches: Vec<PendingConsecutive<'anchor, 'input>> = Vec::new();
+                for candidate in pending_consecutive.drain(..) {
+                    if let AnchorLocation::Consecutive(sequence) = &candidate.location
+                        && candidate.progress < sequence.len()
+                    {
+                        let expected = &sequence[candidate.progress];
+                        if expected.matches_token(&next) {
+                            match expected {
+                                AnchorLocation::Exact { .. } => exact_matches.push(candidate),
+                                AnchorLocation::Kind(_) => kind_matches.push(candidate),
+                                AnchorLocation::Consecutive(_) => {}
+                            }
+                        }
+                    }
+                }
+                let matching_candidates = if !exact_matches.is_empty() {
+                    exact_matches
+                } else {
+                    kind_matches
+                };
+                if !matching_candidates.is_empty() {
+                    lexer.next()?;
+                    let mut next_pending: Vec<PendingConsecutive<'anchor, 'input>> = Vec::new();
+                    let mut completed_candidate: Option<PendingConsecutive<'anchor, 'input>> = None;
+                    for mut candidate in matching_candidates {
+                        candidate.progress += 1;
+                        if let AnchorLocation::Consecutive(sequence) = &candidate.location
+                            && candidate.progress == sequence.len()
+                        {
+                            completed_candidate = Some(candidate);
+                            break;
+                        }
+                        next_pending.push(candidate);
+                    }
+                    if let Some(candidate) = completed_candidate {
+                        let Some(rule) = anchors.get(&candidate.location) else {
+                            return Err(ParserError::Custom(
+                                "Consecutive anchor disappeared while being processed".into(),
+                            ));
+                        };
+                        if let Some(updated_accumulator) = try_rule(
+                            lexer,
+                            rule,
+                            &candidate.start_snapshot,
+                            &candidate.start_token,
+                            accumulator.clone(),
+                        )? {
+                            accumulator = updated_accumulator;
+                            pending_consecutive.clear();
+                            continue 'anchor;
+                        }
+                        pending_consecutive.clear();
+                        lexer.restore(&candidate.start_snapshot);
+                        match lexer.next() {
+                            Ok(_) => continue,
+                            Err(LexerError::Eof) => break 'anchor,
+                            Err(e) => return Err(e.into()),
+                        }
+                    } else {
+                        pending_consecutive = next_pending;
+                        continue 'anchor;
+                    }
+                } else {
+                    pending_consecutive.clear();
+                }
+            }
             let before_current = lexer.snapshot();
-            let mut start_location: Option<AnchorLocation<'anchor>> = None;
-            let mut start_is_exact = false;
+            let mut start_exact: Vec<PendingConsecutive<'anchor, 'input>> = Vec::new();
+            let mut start_kind: Vec<PendingConsecutive<'anchor, 'input>> = Vec::new();
             for location in anchors.keys() {
                 if let AnchorLocation::Consecutive(sequence) = location
                     && let Some(first) = sequence.first()
                     && first.matches_token(&next)
                 {
-                    let is_exact = matches!(first, AnchorLocation::Exact { .. });
-                    let replace_start = start_location.is_none() || (is_exact && !start_is_exact);
-                    if replace_start {
-                        start_location = Some(location.clone());
-                        start_is_exact = is_exact;
-                        if is_exact {
-                            break;
+                    let candidate = PendingConsecutive {
+                        location: location.clone(),
+                        start_snapshot: before_current.clone(),
+                        start_token: next.clone(),
+                        progress: 1,
+                    };
+                    match first {
+                        AnchorLocation::Exact { .. } => start_exact.push(candidate),
+                        AnchorLocation::Kind(_) => start_kind.push(candidate),
+                        AnchorLocation::Consecutive(_) => {}
+                    }
+                }
+            }
+            let start_candidates = if !start_exact.is_empty() {
+                start_exact
+            } else {
+                start_kind
+            };
+            if !start_candidates.is_empty() {
+                let mut next_pending: Vec<PendingConsecutive<'anchor, 'input>> = Vec::new();
+                for candidate in start_candidates {
+                    if let AnchorLocation::Consecutive(sequence) = &candidate.location {
+                        if sequence.len() == 1 {
+                            let Some(rule) = anchors.get(&candidate.location) else {
+                                return Err(ParserError::Custom(
+                                    "Consecutive anchor disappeared while being processed".into(),
+                                ));
+                            };
+                            if let Some(updated_accumulator) = try_rule(
+                                lexer,
+                                rule,
+                                &candidate.start_snapshot,
+                                &candidate.start_token,
+                                accumulator.clone(),
+                            )? {
+                                accumulator = updated_accumulator;
+                                pending_consecutive.clear();
+                                continue 'anchor;
+                            }
+                        } else {
+                            next_pending.push(candidate);
                         }
                     }
                 }
-            }
-
-            if let Some(location) = start_location {
-                pending_consecutive = None;
-                let candidate = PendingConsecutive {
-                    location,
-                    start_snapshot: before_current.clone(),
-                    start_token: next.clone(),
-                    progress: 1,
-                };
-
-                if let AnchorLocation::Consecutive(sequence) = &candidate.location
-                    && sequence.len() == 1
-                {
-                    let Some(rule) = anchors.get(&candidate.location) else {
-                        return Err(ParserError::Custom(
-                            "Consecutive anchor disappeared while being processed".into(),
-                        ));
-                    };
-                    if let Some(updated_accumulator) = try_rule(
-                        lexer,
-                        rule,
-                        &candidate.start_snapshot,
-                        &candidate.start_token,
-                        accumulator.clone(),
-                    )? {
-                        accumulator = updated_accumulator;
-                        continue 'anchor;
-                    }
-                    lexer.next()?;
-                    continue 'anchor;
-                }
-
                 lexer.next()?;
-                pending_consecutive = Some(candidate);
+                pending_consecutive = next_pending;
                 continue 'anchor;
             }
-
-            if let Some(candidate) = pending_consecutive.as_mut() {
-                let mut advanced = false;
-                let mut completed = false;
-                if let AnchorLocation::Consecutive(sequence) = &candidate.location
-                    && candidate.progress < sequence.len()
-                {
-                    let expected = &sequence[candidate.progress];
-                    if expected.matches_token(&next) {
-                        lexer.next()?;
-                        candidate.progress += 1;
-                        advanced = true;
-                        completed = candidate.progress == sequence.len();
-                    }
-                }
-
-                if completed {
-                    let candidate = pending_consecutive.take().expect("candidate must exist");
-                    let Some(rule) = anchors.get(&candidate.location) else {
-                        return Err(ParserError::Custom(
-                            "Consecutive anchor disappeared while being processed".into(),
-                        ));
-                    };
-                    if let Some(updated_accumulator) = try_rule(
-                        lexer,
-                        rule,
-                        &candidate.start_snapshot,
-                        &candidate.start_token,
-                        accumulator.clone(),
-                    )? {
-                        accumulator = updated_accumulator;
-                        continue 'anchor;
-                    }
-
-                    lexer.restore(&candidate.start_snapshot);
-                    pending_consecutive = None;
-                    match lexer.next() {
-                        Ok(_) => continue,
-                        Err(LexerError::Eof) => break 'anchor,
-                        Err(e) => return Err(e.into()),
-                    }
-                }
-
-                if advanced {
-                    continue 'anchor;
-                }
-
-                pending_consecutive = None;
-            }
-
             match lexer.next() {
                 Ok(_) => continue,
                 Err(LexerError::Eof) => break 'anchor,
