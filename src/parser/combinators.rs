@@ -5,7 +5,7 @@ use crate::parser::Parser;
 use crate::parser::lexer::LexerError;
 
 use super::ParserError;
-use super::lexer::Lexer;
+use super::lexer::{Lexer, LexerState, Token};
 
 /// Turns any parser into a parser that cannot fail. When the nested parser
 /// succeeds, its result is wrapped in `Some`. If the nested parser encounters
@@ -33,13 +33,27 @@ where
 
 /// Represents a specific location in the token stream that can be used as an
 /// anchor for parsing.
-#[derive(Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum AnchorLocation<'a> {
     /// Anchor based on token kind only (e.g. any "identifier" token).
     Kind(&'a str),
     /// Anchor based on both token kind and exact text (e.g. a "keyword" token
     /// with text "function").
     Exact { token_kind: &'a str, text: &'a str },
+    /// Anchor based on a series of token locations.
+    Consecutive(Vec<AnchorLocation<'a>>),
+}
+
+impl AnchorLocation<'_> {
+    pub fn matches_token(&self, token: &Token) -> bool {
+        match self {
+            AnchorLocation::Kind(kind) => token.kind == *kind,
+            AnchorLocation::Exact { token_kind, text } => {
+                token.kind == *token_kind && token.text == *text
+            }
+            AnchorLocation::Consecutive(_) => false,
+        }
+    }
 }
 
 /// Parsing behavior for one anchor location.
@@ -52,6 +66,46 @@ where
     pub parsers: Vec<Parser<'p, 'input, L, R>>,
     pub reducer: Box<dyn Fn(A, R) -> A + 'p>,
     pub _input: PhantomData<&'input ()>,
+}
+
+/// Used to keep track of a consecutive anchor candidate that
+/// is currently being matched in the token stream.
+#[derive(Clone)]
+struct PendingConsecutive<'anchor, 'input> {
+    location: AnchorLocation<'anchor>,
+    start_snapshot: LexerState<'input>,
+    start_token: Token<'input>,
+    progress: usize,
+}
+
+fn try_rule<'p, 'input, L, A, R>(
+    lexer: &mut L,
+    rule: &AnchorRule<'p, 'input, L, A, R>,
+    before_anchor: &LexerState<'input>,
+    matched_token: &Token<'input>,
+    accumulator: A,
+) -> Result<Option<A>, ParserError>
+where
+    L: Lexer<'input> + ?Sized + 'p,
+    A: 'p,
+    R: 'p,
+{
+    let mut accumulator = accumulator;
+    for parser in &rule.parsers {
+        lexer.restore(before_anchor);
+        if let Ok(feature) = parser(lexer) {
+            accumulator = (rule.reducer)(accumulator, feature);
+            if lexer.snapshot().input_cursor == before_anchor.input_cursor {
+                return Err(ParserError::Custom(format!(
+                    "Parser for anchor {:?} did not consume any tokens",
+                    (matched_token.kind, matched_token.text)
+                )));
+            }
+            return Ok(Some(accumulator));
+        }
+    }
+    lexer.restore(before_anchor);
+    Ok(None)
 }
 
 /// Returns a parser that iterates over the token stream, looking for tokens that
@@ -73,6 +127,7 @@ where
 {
     Box::new(move |lexer: &mut L| {
         let mut accumulator = initial.clone();
+        let mut pending_consecutive: Option<PendingConsecutive<'anchor, 'input>> = None;
         'anchor: loop {
             let next = match lexer.peek() {
                 Ok(token) => token,
@@ -86,22 +141,121 @@ where
                 })
                 .or_else(|| anchors.get(&AnchorLocation::Kind(next.kind)))
             {
+                pending_consecutive = None;
                 let before_anchor = lexer.snapshot();
-                for parser in &rule.parsers {
-                    lexer.restore(&before_anchor);
-                    if let Ok(feature) = parser(lexer) {
-                        accumulator = (rule.reducer)(accumulator, feature);
-                        if lexer.snapshot().input_cursor == before_anchor.input_cursor {
-                            return Err(ParserError::Custom(format!(
-                                "Parser for anchor {:?} did not consume any tokens",
-                                (next.kind, next.text)
-                            )));
+                if let Some(updated_accumulator) =
+                    try_rule(lexer, rule, &before_anchor, &next, accumulator.clone())?
+                {
+                    accumulator = updated_accumulator;
+                    continue 'anchor;
+                }
+            }
+
+            let before_current = lexer.snapshot();
+            let mut start_location: Option<AnchorLocation<'anchor>> = None;
+            let mut start_is_exact = false;
+            for location in anchors.keys() {
+                if let AnchorLocation::Consecutive(sequence) = location
+                    && let Some(first) = sequence.first()
+                    && first.matches_token(&next)
+                {
+                    let is_exact = matches!(first, AnchorLocation::Exact { .. });
+                    let replace_start = start_location.is_none() || (is_exact && !start_is_exact);
+                    if replace_start {
+                        start_location = Some(location.clone());
+                        start_is_exact = is_exact;
+                        if is_exact {
+                            break;
                         }
-                        continue 'anchor;
                     }
                 }
-                lexer.restore(&before_anchor);
             }
+
+            if let Some(location) = start_location {
+                pending_consecutive = None;
+                let candidate = PendingConsecutive {
+                    location,
+                    start_snapshot: before_current.clone(),
+                    start_token: next.clone(),
+                    progress: 1,
+                };
+
+                if let AnchorLocation::Consecutive(sequence) = &candidate.location
+                    && sequence.len() == 1
+                {
+                    let Some(rule) = anchors.get(&candidate.location) else {
+                        return Err(ParserError::Custom(
+                            "Consecutive anchor disappeared while being processed".into(),
+                        ));
+                    };
+                    if let Some(updated_accumulator) = try_rule(
+                        lexer,
+                        rule,
+                        &candidate.start_snapshot,
+                        &candidate.start_token,
+                        accumulator.clone(),
+                    )? {
+                        accumulator = updated_accumulator;
+                        continue 'anchor;
+                    }
+                    lexer.next()?;
+                    continue 'anchor;
+                }
+
+                lexer.next()?;
+                pending_consecutive = Some(candidate);
+                continue 'anchor;
+            }
+
+            if let Some(candidate) = pending_consecutive.as_mut() {
+                let mut advanced = false;
+                let mut completed = false;
+                if let AnchorLocation::Consecutive(sequence) = &candidate.location
+                    && candidate.progress < sequence.len()
+                {
+                    let expected = &sequence[candidate.progress];
+                    if expected.matches_token(&next) {
+                        lexer.next()?;
+                        candidate.progress += 1;
+                        advanced = true;
+                        completed = candidate.progress == sequence.len();
+                    }
+                }
+
+                if completed {
+                    let candidate = pending_consecutive.take().expect("candidate must exist");
+                    let Some(rule) = anchors.get(&candidate.location) else {
+                        return Err(ParserError::Custom(
+                            "Consecutive anchor disappeared while being processed".into(),
+                        ));
+                    };
+                    if let Some(updated_accumulator) = try_rule(
+                        lexer,
+                        rule,
+                        &candidate.start_snapshot,
+                        &candidate.start_token,
+                        accumulator.clone(),
+                    )? {
+                        accumulator = updated_accumulator;
+                        continue 'anchor;
+                    }
+
+                    lexer.restore(&candidate.start_snapshot);
+                    pending_consecutive = None;
+                    match lexer.next() {
+                        Ok(_) => continue,
+                        Err(LexerError::Eof) => break 'anchor,
+                        Err(e) => return Err(e.into()),
+                    }
+                }
+
+                if advanced {
+                    continue 'anchor;
+                }
+
+                pending_consecutive = None;
+            }
+
             match lexer.next() {
                 Ok(_) => continue,
                 Err(LexerError::Eof) => break 'anchor,
@@ -548,5 +702,137 @@ mod tests {
             ParserError::Custom(msg) => assert!(msg.contains("did not consume any tokens")),
             other => panic!("expected Custom error, got: {:?}", other),
         }
+    }
+
+    #[test]
+    fn parse_at_anchors_supports_consecutive_anchors() {
+        let mut anchors: HashMap<
+            AnchorLocation<'static>,
+            AnchorRule<'static, 'static, TestLexer<'static>, Vec<String>, String>,
+        > = HashMap::new();
+        anchors.insert(
+            AnchorLocation::Consecutive(vec![
+                AnchorLocation::Exact {
+                    token_kind: "A",
+                    text: "@",
+                },
+                AnchorLocation::Kind("V"),
+            ]),
+            anchor_rule(
+                vec![Box::new(|lexer: &mut TestLexer<'static>| {
+                    let start = lexer.next()?;
+                    if start.kind != "A" || start.text != "@" {
+                        return Err(ParserError::UnexpectedToken {
+                            expected: "A:@".into(),
+                            found: format!("{}:{}", start.kind, start.text),
+                        });
+                    }
+                    let value = lexer.next()?;
+                    if value.kind != "V" {
+                        return Err(ParserError::UnexpectedToken {
+                            expected: "V".into(),
+                            found: value.kind.into(),
+                        });
+                    }
+                    Ok(value.text.to_string())
+                })],
+                |mut features: Vec<String>, feature| {
+                    features.push(feature);
+                    features
+                },
+            ),
+        );
+
+        let mut lexer = TestLexer::new(vec![
+            tok("N", "x"),
+            tok("A", "@"),
+            tok("V", "one"),
+            tok("N", "y"),
+            tok("A", "@"),
+            tok("V", "two"),
+        ]);
+
+        let parser = parse_at_anchors(Vec::new(), anchors);
+        let result = parser(&mut lexer).unwrap();
+
+        assert_eq!(result, vec!["one".to_string(), "two".to_string()]);
+        assert_eq!(lexer.snapshot().token_buffer_index, 6);
+    }
+
+    #[test]
+    fn parse_at_anchors_drops_consecutive_anchor_when_competing_anchor_matches() {
+        let mut anchors: HashMap<
+            AnchorLocation<'static>,
+            AnchorRule<'static, 'static, TestLexer<'static>, Vec<String>, String>,
+        > = HashMap::new();
+
+        anchors.insert(
+            AnchorLocation::Consecutive(vec![
+                AnchorLocation::Exact {
+                    token_kind: "A",
+                    text: "@",
+                },
+                AnchorLocation::Kind("B"),
+            ]),
+            anchor_rule(
+                vec![Box::new(|lexer: &mut TestLexer<'static>| {
+                    let start = lexer.next()?;
+                    if start.kind != "A" || start.text != "@" {
+                        return Err(ParserError::UnexpectedToken {
+                            expected: "A:@".into(),
+                            found: format!("{}:{}", start.kind, start.text),
+                        });
+                    }
+                    let value = lexer.next()?;
+                    if value.kind != "B" {
+                        return Err(ParserError::UnexpectedToken {
+                            expected: "B".into(),
+                            found: value.kind.into(),
+                        });
+                    }
+                    Ok(format!("consecutive:{}", value.text))
+                })],
+                |mut features: Vec<String>, feature| {
+                    features.push(feature);
+                    features
+                },
+            ),
+        );
+
+        anchors.insert(
+            AnchorLocation::Kind("V"),
+            anchor_rule(
+                vec![Box::new(|lexer: &mut TestLexer<'static>| {
+                    let value = lexer.next()?;
+                    if value.kind != "V" {
+                        return Err(ParserError::UnexpectedToken {
+                            expected: "V".into(),
+                            found: value.kind.into(),
+                        });
+                    }
+                    Ok(format!("single:{}", value.text))
+                })],
+                |mut features: Vec<String>, feature| {
+                    features.push(feature);
+                    features
+                },
+            ),
+        );
+
+        let mut lexer = TestLexer::new(vec![
+            tok("A", "@"),
+            tok("V", "one"),
+            tok("A", "@"),
+            tok("B", "ok"),
+        ]);
+
+        let parser = parse_at_anchors(Vec::new(), anchors);
+        let result = parser(&mut lexer).unwrap();
+
+        assert_eq!(
+            result,
+            vec!["single:one".to_string(), "consecutive:ok".to_string()]
+        );
+        assert_eq!(lexer.snapshot().token_buffer_index, 4);
     }
 }
