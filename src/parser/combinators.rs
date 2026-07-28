@@ -853,4 +853,132 @@ mod tests {
         );
         assert_eq!(lexer.snapshot().token_buffer_index, 4);
     }
+
+    #[test]
+    fn parse_at_anchors_supports_multiple_consecutive_candidates_with_competing_single_anchor() {
+        let mut anchors: HashMap<
+            AnchorLocation<'static>,
+            AnchorRule<'static, 'static, TestLexer<'static>, Vec<String>, String>,
+        > = HashMap::new();
+
+        anchors.insert(
+            AnchorLocation::Consecutive(vec![
+                AnchorLocation::Exact {
+                    token_kind: "A",
+                    text: "@",
+                },
+                AnchorLocation::Kind("V"),
+                AnchorLocation::Kind("X"),
+            ]),
+            anchor_rule(
+                vec![Box::new(|lexer: &mut TestLexer<'static>| {
+                    let first = lexer.next()?;
+                    if first.kind != "A" || first.text != "@" {
+                        return Err(ParserError::UnexpectedToken {
+                            expected: "A:@".into(),
+                            found: format!("{}:{}", first.kind, first.text),
+                        });
+                    }
+                    let second = lexer.next()?;
+                    if second.kind != "V" {
+                        return Err(ParserError::UnexpectedToken {
+                            expected: "V".into(),
+                            found: second.kind.into(),
+                        });
+                    }
+                    let third = lexer.next()?;
+                    if third.kind != "X" {
+                        return Err(ParserError::UnexpectedToken {
+                            expected: "X".into(),
+                            found: third.kind.into(),
+                        });
+                    }
+                    Ok(format!("long:{}:{}", second.text, third.text))
+                })],
+                |mut features: Vec<String>, feature| {
+                    features.push(feature);
+                    features
+                },
+            ),
+        );
+
+        anchors.insert(
+            AnchorLocation::Consecutive(vec![
+                AnchorLocation::Exact {
+                    token_kind: "A",
+                    text: "@",
+                },
+                AnchorLocation::Kind("V"),
+                AnchorLocation::Kind("Y"),
+            ]),
+            anchor_rule(
+                vec![Box::new(|lexer: &mut TestLexer<'static>| {
+                    let first = lexer.next()?;
+                    if first.kind != "A" || first.text != "@" {
+                        return Err(ParserError::UnexpectedToken {
+                            expected: "A:@".into(),
+                            found: format!("{}:{}", first.kind, first.text),
+                        });
+                    }
+                    let second = lexer.next()?;
+                    if second.kind != "V" {
+                        return Err(ParserError::UnexpectedToken {
+                            expected: "V".into(),
+                            found: second.kind.into(),
+                        });
+                    }
+                    let third = lexer.next()?;
+                    if third.kind != "Y" {
+                        return Err(ParserError::UnexpectedToken {
+                            expected: "Y".into(),
+                            found: third.kind.into(),
+                        });
+                    }
+                    Ok(format!("long:{}:{}", second.text, third.text))
+                })],
+                |mut features: Vec<String>, feature| {
+                    features.push(feature);
+                    features
+                },
+            ),
+        );
+
+        anchors.insert(
+            AnchorLocation::Kind("Y"),
+            anchor_rule(
+                vec![Box::new(|lexer: &mut TestLexer<'static>| {
+                    let value = lexer.next()?;
+                    if value.kind != "Y" {
+                        return Err(ParserError::UnexpectedToken {
+                            expected: "Y".into(),
+                            found: value.kind.into(),
+                        });
+                    }
+                    Ok(format!("single:{}", value.text))
+                })],
+                |mut features: Vec<String>, feature| {
+                    features.push(feature);
+                    features
+                },
+            ),
+        );
+
+        let mut lexer = TestLexer::new(vec![
+            tok("A", "@"),
+            tok("V", "one"),
+            tok("Y", "drop-me"),
+            tok("A", "@"),
+            tok("V", "two"),
+            tok("X", "keep-me"),
+        ]);
+
+        let parser = parse_at_anchors(Vec::new(), anchors);
+        let result = parser(&mut lexer).unwrap();
+
+        assert_eq!(
+            result,
+            vec!["single:drop-me".to_string(), "long:two:keep-me".to_string()]
+        );
+        assert_eq!(lexer.snapshot().token_buffer_index, 6);
+    }
 }
