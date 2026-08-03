@@ -22,10 +22,12 @@ pub fn generate(
         .iter()
         .find(|config| config.name == input_language)
         .ok_or(PTIPFFIError::LanguageNotFound(input_language.into()))?;
-    let _output_config = registry
+    let output_config = registry
         .iter()
         .find(|config| config.name == output_language)
         .ok_or(PTIPFFIError::LanguageNotFound(output_language.into()))?;
-    let _features = (input_config.parse)(input)?;
+    let features = (input_config.parse)(input)?;
+    let callee = (input_config.generate_callee)(vec![&features]);
+    let caller = (output_config.generate_caller)(vec![&features]);
     Ok(())
 }
