@@ -3,6 +3,9 @@ use crate::{
     features::{Module, ModulePath},
 };
 
+const SOCKET_IMPLEMENTATION: &str = include_str!("./assets/socket.ts");
+const BRIDGE_IMPLEMENTATION: &str = include_str!("./assets/bridge.ts");
+
 pub fn generate(module: &Module) -> CodegenOutput {
     // dummy implementation
     CodegenOutput {
