@@ -64,19 +64,6 @@ pub fn generate_caller(modules: Vec<&Module>) -> Vec<CodegenOutput> {
     ]
 }
 
-pub fn generate_callee(modules: Vec<&Module>) -> Vec<CodegenOutput> {
-    modules
-        .into_iter()
-        .map(|module| CodegenOutput {
-            path: PathBuf::from("generated_callee.ts"),
-            content: format!(
-                "// Generated TypeScript code for callee module: {}",
-                module.path.format(".")
-            ),
-        })
-        .collect()
-}
-
 fn render_template(
     engine: &TemplateEngine,
     template: &str,
