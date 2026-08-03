@@ -9,6 +9,7 @@ const BRIDGE_IMPLEMENTATION: &str = include_str!("./assets/bridge.ts");
 const CALLER_PACKAGE_JSON: &str = include_str!("./assets/caller/package.json");
 const CALLER_PACKAGE_LOCK_JSON: &str = include_str!("./assets/caller/package-lock.json");
 const CALLER_MAIN: &str = include_str!("./assets/caller/main.ts");
+const CALLER_INDEX: &str = include_str!("./assets/caller/index.ts");
 
 pub fn generate_caller(modules: Vec<&Module>) -> Vec<CodegenOutput> {
     // Add static assets
