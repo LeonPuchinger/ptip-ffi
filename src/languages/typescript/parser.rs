@@ -172,7 +172,9 @@ fn consume_statement_terminator<'input>(
     }
 }
 
-fn consume_balanced_block<'input>(lexer: &mut LazyStatefulLexer<'input>) -> Result<(), ParserError> {
+fn consume_balanced_block<'input>(
+    lexer: &mut LazyStatefulLexer<'input>,
+) -> Result<(), ParserError> {
     let mut depth = 1usize;
     while depth > 0 {
         match lexer.next() {
@@ -458,10 +460,7 @@ fn keyworded_function_definition<'input>(
     let name = token_kind("identifier")(lexer)?;
     let callable = parse_callable_signature(lexer)?;
     consume_function_body_or_terminator(lexer)?;
-    Ok(FunctionDefinition {
-        name,
-        callable,
-    })
+    Ok(FunctionDefinition { name, callable })
 }
 
 fn default_keyworded_anonymous_function<'input>(
@@ -1215,7 +1214,10 @@ mod tests {
             .map(|f| f.name.clone())
             .collect::<Vec<_>>();
         function_names.sort();
-        assert_eq!(function_names, vec!["host".to_string(), "shown".to_string()]);
+        assert_eq!(
+            function_names,
+            vec!["host".to_string(), "shown".to_string()]
+        );
         assert_eq!(module.types.len(), 0);
         let _ = find_function(&module, "host");
         let _ = find_function(&module, "shown");

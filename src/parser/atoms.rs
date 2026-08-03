@@ -4,7 +4,9 @@ use crate::parser::{
 };
 
 /// A parser that matches a token based on its kind.
-pub fn token_kind<'p, 'input, L: Lexer<'input>>(expected_kind: &'p str) -> Parser<'p, 'input, L, String> {
+pub fn token_kind<'p, 'input, L: Lexer<'input>>(
+    expected_kind: &'p str,
+) -> Parser<'p, 'input, L, String> {
     Box::new(move |lexer: &mut L| {
         let snapshot = lexer.snapshot();
         let token = lexer.next()?;
@@ -22,7 +24,9 @@ pub fn token_kind<'p, 'input, L: Lexer<'input>>(expected_kind: &'p str) -> Parse
 
 /// A parser that matches a specific sequence of text from the input.
 /// It should be mentioned, however, that the expected text has to align with token boundaries.
-pub fn exact<'p, 'input, L: Lexer<'input>>(expected_text: &'p str) -> Parser<'p, 'input, L, String> {
+pub fn exact<'p, 'input, L: Lexer<'input>>(
+    expected_text: &'p str,
+) -> Parser<'p, 'input, L, String> {
     Box::new(move |lexer: &mut L| {
         let snapshot = lexer.snapshot();
         let mut matched = String::new();

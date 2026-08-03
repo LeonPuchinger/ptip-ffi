@@ -260,15 +260,11 @@ mod tests {
     fn branch_before_index_zero_works_on_empty_list_and_is_reused() {
         let mut list: BranchedList<'static, i32> = BranchedList::empty();
 
-        let mut b1 = list
-            .branch_before_index("h", 0)
-            .expect("branch at gap 0");
+        let mut b1 = list.branch_before_index("h", 0).expect("branch at gap 0");
         assert_eq!(b1.root_branch_size(), 0);
         b1.append(10);
 
-        let b2 = list
-            .branch_before_index("h", 0)
-            .expect("reuse same branch");
+        let b2 = list.branch_before_index("h", 0).expect("reuse same branch");
         assert_eq!(b2.get(0), Some(10));
         assert_eq!(b2.root_branch_size(), 1);
 
