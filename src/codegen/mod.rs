@@ -1,8 +1,8 @@
-use crate::features::ModulePath;
+use std::path::PathBuf;
 
 mod template;
 
 pub struct CodegenOutput {
-    pub path: ModulePath,
+    pub path: PathBuf,
     pub content: String,
 }

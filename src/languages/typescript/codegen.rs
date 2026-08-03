@@ -1,7 +1,6 @@
-use crate::{
-    codegen::CodegenOutput,
-    features::{Module, ModulePath},
-};
+use std::path::PathBuf;
+
+use crate::{codegen::CodegenOutput, features::Module};
 
 // Common assets (shared between caller and callee)
 const SOCKET_IMPLEMENTATION: &str = include_str!("./assets/socket.ts");
@@ -15,23 +14,23 @@ pub fn generate_caller(modules: Vec<&Module>) -> Vec<CodegenOutput> {
     // Add static assets
     let mut output = vec![
         CodegenOutput {
-            path: ModulePath::new(vec!["ffi", "socket.ts"]),
+            path: PathBuf::from("ffi/socket.ts"),
             content: SOCKET_IMPLEMENTATION.to_owned(),
         },
         CodegenOutput {
-            path: ModulePath::new(vec!["ffi", "bridge.ts"]),
+            path: PathBuf::from("ffi/bridge.ts"),
             content: BRIDGE_IMPLEMENTATION.to_owned(),
         },
         CodegenOutput {
-            path: ModulePath::new(vec!["ffi", "main.ts"]),
+            path: PathBuf::from("ffi/main.ts"),
             content: CALLER_MAIN.to_owned(),
         },
         CodegenOutput {
-            path: ModulePath::new(vec!["package.json"]),
+            path: PathBuf::from("package.json"),
             content: CALLER_PACKAGE_JSON.to_owned(),
         },
         CodegenOutput {
-            path: ModulePath::new(vec!["package-lock.json"]),
+            path: PathBuf::from("package-lock.json"),
             content: CALLER_PACKAGE_LOCK_JSON.to_owned(),
         },
     ];
@@ -43,7 +42,7 @@ pub fn generate_callee(modules: Vec<&Module>) -> Vec<CodegenOutput> {
     modules
         .into_iter()
         .map(|module| CodegenOutput {
-            path: ModulePath::new(vec!["generated_callee.ts".to_owned()]),
+            path: PathBuf::from("generated_callee.ts"),
             content: format!(
                 "// Generated TypeScript code for callee module: {}",
                 module.path.format(".")
