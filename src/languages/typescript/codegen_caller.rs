@@ -1,4 +1,4 @@
-use std::{collections::HashMap, path::PathBuf};
+use std::path::PathBuf;
 
 use crate::{
     codegen::{CodegenOutput, template::TemplateEngine},
@@ -34,8 +34,13 @@ pub fn generate_caller(modules: Vec<&Module>) -> Vec<CodegenOutput> {
         TemplateEngine::new("/* {{NAME}} */").expect("failed to compile template placeholder");
 
     let stubs = render_caller_stubs(&engine, &modules);
-    let rendered_index = render_template(&engine, CALLER_INDEX, &[("STUBS", stubs)]);
-
+    let rendered_index = engine.render(
+        CALLER_INDEX,
+        &crate::map! {
+            "STUBS" => stubs.as_str(),
+        },
+        false,
+    );
     vec![
         CodegenOutput {
             path: PathBuf::from("ffi/socket.ts"),
@@ -64,39 +69,17 @@ pub fn generate_caller(modules: Vec<&Module>) -> Vec<CodegenOutput> {
     ]
 }
 
-fn render_template(
-    engine: &TemplateEngine,
-    template: &str,
-    replacements: &[(&str, String)],
-) -> String {
-    let mut rendered = template.to_owned();
-
-    for (name, replacement) in replacements {
-        rendered = engine.render(
-            &rendered,
-            &HashMap::from([(*name, replacement.as_str())]),
-            false,
-        );
-    }
-
-    rendered
-}
-
 fn render_caller_stubs(engine: &TemplateEngine, modules: &[&Module]) -> String {
     let mut stubs = Vec::new();
-
     for module in modules {
         let module_path = module.path.format(".");
-
         for function in &module.functions {
             stubs.push(render_function_stub(engine, &module_path, function));
         }
-
         for definition in &module.types {
             stubs.push(render_type_stub(engine, &module_path, definition));
         }
     }
-
     stubs.join("\n\n")
 }
 
@@ -105,36 +88,28 @@ fn render_function_stub(
     module_path: &str,
     function: &FunctionDefinition,
 ) -> String {
-    render_template(
+    let type_parameters = render_type_parameters(&function.callable.type_parameters);
+    let parameters = render_parameters(&function.callable.positional_parameters);
+    let return_type = render_type_annotation(&function.callable.return_type);
+    let body = render_call_body(
         engine,
+        module_path,
+        &function.name,
+        &function.callable,
+        &function.callable.return_type,
+        false,
+        None,
+    );
+    engine.render(
         CALLER_FUNCTION_STUB,
-        &[
-            ("NAME", function.name.clone()),
-            (
-                "TYPE_PARAMETERS",
-                render_type_parameters(&function.callable.type_parameters),
-            ),
-            (
-                "PARAMETERS",
-                render_parameters(&function.callable.positional_parameters),
-            ),
-            (
-                "RETURN_TYPE",
-                render_type_annotation(&function.callable.return_type),
-            ),
-            (
-                "BODY",
-                render_call_body(
-                    engine,
-                    module_path,
-                    &function.name,
-                    &function.callable,
-                    &function.callable.return_type,
-                    false,
-                    None,
-                ),
-            ),
-        ],
+        &crate::map! {
+            "NAME" => function.name.as_str(),
+            "TYPE_PARAMETERS" => type_parameters.as_str(),
+            "PARAMETERS" => parameters.as_str(),
+            "RETURN_TYPE" => return_type.as_str(),
+            "BODY" => body.as_str(),
+        },
+        false,
     )
 }
 
@@ -144,7 +119,6 @@ fn render_type_stub(
     definition: &TypeDefinition,
 ) -> String {
     let mut members = Vec::new();
-
     if let Some(constructor) = &definition.default_constructor {
         members.push(render_constructor_stub(
             engine,
@@ -153,18 +127,14 @@ fn render_type_stub(
             constructor,
         ));
     }
-
     members.push(render_reference_factory(engine, &definition.name));
-
     for property in &definition.properties {
         members.push(render_property_getter(engine, &definition.name, property));
         members.push(render_property_setter(engine, &property.0, &property.1));
     }
-
     for method in &definition.methods {
         members.push(render_method_stub(engine, &definition.name, method));
     }
-
     for method in &definition.static_methods {
         members.push(render_static_method_stub(
             engine,
@@ -173,7 +143,6 @@ fn render_type_stub(
             method,
         ));
     }
-
     for constructor in &definition.named_constructors {
         members.push(render_static_named_constructor_stub(
             engine,
@@ -182,14 +151,14 @@ fn render_type_stub(
             constructor,
         ));
     }
-
-    render_template(
-        engine,
+    let members = members.join("\n");
+    engine.render(
         CALLER_CLASS_STUB,
-        &[
-            ("NAME", definition.name.clone()),
-            ("MEMBERS", members.join("\n")),
-        ],
+        &crate::map! {
+            "NAME" => definition.name.as_str(),
+            "MEMBERS" => members.as_str(),
+        },
+        false,
     )
 }
 
@@ -199,29 +168,27 @@ fn render_constructor_stub(
     type_name: &str,
     constructor: &AnonymousCallable,
 ) -> String {
-    render_template(
-        engine,
+    let parameters = render_parameters(&constructor.positional_parameters);
+    let positional_values = render_parameters_values(&constructor.positional_parameters);
+    engine.render(
         CALLER_CONSTRUCTOR_STUB,
-        &[
-            (
-                "PARAMETERS",
-                render_parameters(&constructor.positional_parameters),
-            ),
-            ("MODULE_PATH", module_path.to_string()),
-            ("TYPE_NAME", type_name.to_string()),
-            (
-                "POSITIONAL_VALUES",
-                render_parameters_values(&constructor.positional_parameters),
-            ),
-        ],
+        &crate::map! {
+            "PARAMETERS" => parameters.as_str(),
+            "MODULE_PATH" => module_path,
+            "TYPE_NAME" => type_name,
+            "POSITIONAL_VALUES" => positional_values.as_str(),
+        },
+        false,
     )
 }
 
 fn render_reference_factory(engine: &TemplateEngine, type_name: &str) -> String {
-    render_template(
-        engine,
+    engine.render(
         CALLER_REFERENCE_FACTORY,
-        &[("NAME", type_name.to_string())],
+        &crate::map! {
+            "NAME" => type_name,
+        },
+        false,
     )
 }
 
@@ -230,66 +197,56 @@ fn render_property_getter(
     type_name: &str,
     property: &(String, Type),
 ) -> String {
-    render_template(
-        engine,
+    let return_type = render_type_annotation(&property.1);
+    let body = render_response_body(&property.1, type_name, "sendMessage.value");
+    engine.render(
         CALLER_PROPERTY_GETTER,
-        &[
-            ("NAME", property.0.clone()),
-            ("RETURN_TYPE", render_type_annotation(&property.1)),
-            (
-                "BODY",
-                render_response_body(&property.1, type_name, "sendMessage.value"),
-            ),
-        ],
+        &crate::map! {
+            "NAME" => property.0.as_str(),
+            "RETURN_TYPE" => return_type.as_str(),
+            "BODY" => body.as_str(),
+        },
+        false,
     )
 }
 
 fn render_property_setter(engine: &TemplateEngine, name: &str, property_type: &Type) -> String {
-    render_template(
-        engine,
+    let value_type = render_type_annotation(property_type);
+    let value = render_parameter_value_expression(property_type, "value");
+    engine.render(
         CALLER_PROPERTY_SETTER,
-        &[
-            ("NAME", name.to_string()),
-            ("VALUE_TYPE", render_type_annotation(property_type)),
-            (
-                "VALUE",
-                render_parameter_value_expression(property_type, "value"),
-            ),
-        ],
+        &crate::map! {
+            "NAME" => name,
+            "VALUE_TYPE" => value_type.as_str(),
+            "VALUE" => value.as_str(),
+        },
+        false,
     )
 }
 
 fn render_method_stub(engine: &TemplateEngine, type_name: &str, method: &Method) -> String {
-    render_template(
+    let type_parameters = render_type_parameters(&method.callable.type_parameters);
+    let parameters = render_parameters(&method.callable.positional_parameters);
+    let return_type = render_type_annotation(&method.callable.return_type);
+    let body = render_call_body(
         engine,
+        "",
+        &method.name,
+        &method.callable,
+        &method.callable.return_type,
+        false,
+        Some(type_name),
+    );
+    engine.render(
         CALLER_METHOD_STUB,
-        &[
-            ("NAME", method.name.clone()),
-            (
-                "TYPE_PARAMETERS",
-                render_type_parameters(&method.callable.type_parameters),
-            ),
-            (
-                "PARAMETERS",
-                render_parameters(&method.callable.positional_parameters),
-            ),
-            (
-                "RETURN_TYPE",
-                render_type_annotation(&method.callable.return_type),
-            ),
-            (
-                "BODY",
-                render_call_body(
-                    engine,
-                    "",
-                    &method.name,
-                    &method.callable,
-                    &method.callable.return_type,
-                    false,
-                    Some(type_name),
-                ),
-            ),
-        ],
+        &crate::map! {
+            "NAME" => method.name.as_str(),
+            "TYPE_PARAMETERS" => type_parameters.as_str(),
+            "PARAMETERS" => parameters.as_str(),
+            "RETURN_TYPE" => return_type.as_str(),
+            "BODY" => body.as_str(),
+        },
+        false,
     )
 }
 
@@ -299,36 +256,28 @@ fn render_static_method_stub(
     type_name: &str,
     method: &Method,
 ) -> String {
-    render_template(
+    let type_parameters = render_type_parameters(&method.callable.type_parameters);
+    let parameters = render_parameters(&method.callable.positional_parameters);
+    let return_type = render_type_annotation(&method.callable.return_type);
+    let body = render_call_body(
         engine,
+        module_path,
+        &format!("{}.{}", type_name, method.name),
+        &method.callable,
+        &method.callable.return_type,
+        false,
+        Some(type_name),
+    );
+    engine.render(
         CALLER_STATIC_METHOD_STUB,
-        &[
-            ("NAME", method.name.clone()),
-            (
-                "TYPE_PARAMETERS",
-                render_type_parameters(&method.callable.type_parameters),
-            ),
-            (
-                "PARAMETERS",
-                render_parameters(&method.callable.positional_parameters),
-            ),
-            (
-                "RETURN_TYPE",
-                render_type_annotation(&method.callable.return_type),
-            ),
-            (
-                "BODY",
-                render_call_body(
-                    engine,
-                    module_path,
-                    &format!("{}.{}", type_name, method.name),
-                    &method.callable,
-                    &method.callable.return_type,
-                    false,
-                    Some(type_name),
-                ),
-            ),
-        ],
+        &crate::map! {
+            "NAME" => method.name.as_str(),
+            "TYPE_PARAMETERS" => type_parameters.as_str(),
+            "PARAMETERS" => parameters.as_str(),
+            "RETURN_TYPE" => return_type.as_str(),
+            "BODY" => body.as_str(),
+        },
+        false,
     )
 }
 
@@ -342,37 +291,30 @@ fn render_static_named_constructor_stub(
         crate::features::ModulePath::empty(),
         type_name.to_string(),
     )));
-
-    render_template(
+    let type_parameters = render_type_parameters(&constructor.callable.type_parameters);
+    let parameters = render_parameters(&constructor.callable.positional_parameters);
+    let body = render_call_body(
         engine,
+        module_path,
+        &format!("{}.{}", type_name, constructor.name),
+        &constructor.callable,
+        &Type::Composite(crate::features::TypePath::new(
+            crate::features::ModulePath::empty(),
+            type_name.to_string(),
+        )),
+        false,
+        Some(type_name),
+    );
+    engine.render(
         CALLER_STATIC_NAMED_CONSTRUCTOR_STUB,
-        &[
-            ("NAME", constructor.name.clone()),
-            (
-                "TYPE_PARAMETERS",
-                render_type_parameters(&constructor.callable.type_parameters),
-            ),
-            (
-                "PARAMETERS",
-                render_parameters(&constructor.callable.positional_parameters),
-            ),
-            ("RETURN_TYPE", return_type),
-            (
-                "BODY",
-                render_call_body(
-                    engine,
-                    module_path,
-                    &format!("{}.{}", type_name, constructor.name),
-                    &constructor.callable,
-                    &Type::Composite(crate::features::TypePath::new(
-                        crate::features::ModulePath::empty(),
-                        type_name.to_string(),
-                    )),
-                    false,
-                    Some(type_name),
-                ),
-            ),
-        ],
+        &crate::map! {
+            "NAME" => constructor.name.as_str(),
+            "TYPE_PARAMETERS" => type_parameters.as_str(),
+            "PARAMETERS" => parameters.as_str(),
+            "RETURN_TYPE" => return_type.as_str(),
+            "BODY" => body.as_str(),
+        },
+        false,
     )
 }
 
@@ -391,28 +333,26 @@ fn render_call_body(
         receiver_type_name.unwrap_or(callee_name),
         "sendMessage.value",
     );
-
     if is_method {
-        return render_template(
-            engine,
+        return engine.render(
             CALLER_CALL_METHOD_BODY,
-            &[
-                ("METHOD_NAME", callee_name.to_string()),
-                ("POSITIONAL_VALUES", positional_values),
-                ("RESPONSE_BODY", response_body),
-            ],
+            &crate::map! {
+                "METHOD_NAME" => callee_name,
+                "POSITIONAL_VALUES" => positional_values.as_str(),
+                "RESPONSE_BODY" => response_body.as_str(),
+            },
+            false,
         );
     }
-
-    render_template(
-        engine,
+    engine.render(
         CALLER_CALL_FUNCTION_BODY,
-        &[
-            ("MODULE_PATH", module_path.to_string()),
-            ("CALLEE_NAME", callee_name.to_string()),
-            ("POSITIONAL_VALUES", positional_values),
-            ("RESPONSE_BODY", response_body),
-        ],
+        &crate::map! {
+            "MODULE_PATH" => module_path,
+            "CALLEE_NAME" => callee_name,
+            "POSITIONAL_VALUES" => positional_values.as_str(),
+            "RESPONSE_BODY" => response_body.as_str(),
+        },
+        false,
     )
 }
 
@@ -501,7 +441,6 @@ fn render_parameter_signature(parameter: &ValueParameter) -> String {
         "?"
     };
     let rest = if parameter.variadic { "..." } else { "" };
-
     format!(
         "{rest}{name}{optional}: {type_annotation}",
         rest = rest,
@@ -523,7 +462,6 @@ fn render_type_parameters(parameters: &[TypeParameter]) -> String {
     if parameters.is_empty() {
         return String::new();
     }
-
     let rendered = parameters
         .iter()
         .map(|parameter| match &parameter.default {
@@ -532,7 +470,6 @@ fn render_type_parameters(parameters: &[TypeParameter]) -> String {
         })
         .collect::<Vec<_>>()
         .join(", ");
-
     format!("<{rendered}>")
 }
 

@@ -1,7 +1,4 @@
-use std::{
-    collections::{BTreeSet, HashMap},
-    path::PathBuf,
-};
+use std::{collections::BTreeSet, path::PathBuf};
 
 use crate::{
     codegen::{CodegenOutput, template::TemplateEngine},
@@ -67,10 +64,12 @@ pub fn generate_callee(modules: Vec<&Module>) -> Vec<CodegenOutput> {
         },
         CodegenOutput {
             path: PathBuf::from("main.ts"),
-            content: render_template(
-                &engine,
+            content: engine.render(
                 CALLEE_MAIN,
-                &[("SOCKET_PATH", "/tmp/test_ptip_ffi.sock".to_string())],
+                &crate::map! {
+                    "SOCKET_PATH" => "/tmp/test_ptip_ffi.sock",
+                },
+                false,
             ),
         },
         CodegenOutput {
@@ -80,22 +79,6 @@ pub fn generate_callee(modules: Vec<&Module>) -> Vec<CodegenOutput> {
     ];
     outputs.extend(rendered_modules);
     outputs
-}
-
-fn render_template(
-    engine: &TemplateEngine,
-    template: &str,
-    replacements: &[(&str, String)],
-) -> String {
-    let mut rendered = template.to_owned();
-    for (name, replacement) in replacements {
-        rendered = engine.render(
-            &rendered,
-            &HashMap::from([(*name, replacement.as_str())]),
-            false,
-        );
-    }
-    rendered
 }
 
 fn render_callee_modules(engine: &TemplateEngine, modules: &[&Module]) -> Vec<CodegenOutput> {
@@ -115,10 +98,13 @@ fn render_callee_module(
 ) -> String {
     let imports = render_module_imports(module, all_modules);
     let declarations = render_module_declarations(engine, module);
-    render_template(
-        engine,
+    engine.render(
         CALLEE_LIBRARY_INDEX,
-        &[("IMPORTS", imports), ("DECLARATIONS", declarations)],
+        &crate::map! {
+            "IMPORTS" => imports.as_str(),
+            "DECLARATIONS" => declarations.as_str(),
+        },
+        false,
     )
 }
 
@@ -129,17 +115,17 @@ fn render_dispatch(engine: &TemplateEngine, modules: &[&Module]) -> String {
     let method_cases = render_method_cases(engine, modules);
     let request_cases = render_request_cases(engine, modules);
     let update_cases = render_update_cases(engine, modules);
-    render_template(
-        engine,
+    engine.render(
         CALLEE_DISPATCH,
-        &[
-            ("IMPORTS", imports),
-            ("FUNCTION_CASES", function_cases),
-            ("STATIC_METHOD_CASES", static_method_cases),
-            ("METHOD_CASES", method_cases),
-            ("REQUEST_CASES", request_cases),
-            ("UPDATE_CASES", update_cases),
-        ],
+        &crate::map! {
+            "IMPORTS" => imports.as_str(),
+            "FUNCTION_CASES" => function_cases.as_str(),
+            "STATIC_METHOD_CASES" => static_method_cases.as_str(),
+            "METHOD_CASES" => method_cases.as_str(),
+            "REQUEST_CASES" => request_cases.as_str(),
+            "UPDATE_CASES" => update_cases.as_str(),
+        },
+        false,
     )
 }
 
@@ -205,16 +191,17 @@ fn render_function_declaration(
     let type_parameters =
         render_type_parameters(&function.callable.type_parameters, current_module);
     let return_type = render_type_annotation(&function.callable.return_type, current_module);
-    render_template(
-        engine,
+    let body = render_not_implemented_body();
+    engine.render(
         CALLEE_FUNCTION_DECLARATION,
-        &[
-            ("NAME", function.name.clone()),
-            ("TYPE_PARAMETERS", type_parameters),
-            ("PARAMETERS", parameters),
-            ("RETURN_TYPE", return_type),
-            ("BODY", render_not_implemented_body()),
-        ],
+        &crate::map! {
+            "NAME" => function.name.as_str(),
+            "TYPE_PARAMETERS" => type_parameters.as_str(),
+            "PARAMETERS" => parameters.as_str(),
+            "RETURN_TYPE" => return_type.as_str(),
+            "BODY" => body.as_str(),
+        },
+        false,
     )
 }
 
@@ -246,15 +233,16 @@ fn render_type_definition(
             &definition.name,
         ));
     }
-    render_template(
-        engine,
+    let members = members.join("\n");
+    engine.render(
         CALLEE_CLASS_DECLARATION,
-        &[
-            ("NAME", definition.name.clone()),
-            ("TYPE_PARAMETERS", type_parameters),
-            ("IMPLEMENTS", implements),
-            ("MEMBERS", members.join("\n")),
-        ],
+        &crate::map! {
+            "NAME" => definition.name.as_str(),
+            "TYPE_PARAMETERS" => type_parameters.as_str(),
+            "IMPLEMENTS" => implements.as_str(),
+            "MEMBERS" => members.as_str(),
+        },
+        false,
     )
 }
 
@@ -264,13 +252,14 @@ fn render_constructor(
     current_module: &ModulePath,
 ) -> String {
     let parameters = render_parameters(&constructor.positional_parameters, current_module);
-    render_template(
-        engine,
+    let body = render_not_implemented_body();
+    engine.render(
         CALLEE_CONSTRUCTOR_DECLARATION,
-        &[
-            ("PARAMETERS", parameters),
-            ("BODY", render_not_implemented_body()),
-        ],
+        &crate::map! {
+            "PARAMETERS" => parameters.as_str(),
+            "BODY" => body.as_str(),
+        },
+        false,
     )
 }
 
@@ -279,16 +268,14 @@ fn render_property(
     property: &(String, Type),
     current_module: &ModulePath,
 ) -> String {
-    render_template(
-        engine,
+    let return_type = render_type_annotation(&property.1, current_module);
+    engine.render(
         CALLEE_PROPERTY_DECLARATION,
-        &[
-            ("NAME", property.0.clone()),
-            (
-                "RETURN_TYPE",
-                render_type_annotation(&property.1, current_module),
-            ),
-        ],
+        &crate::map! {
+            "NAME" => property.0.as_str(),
+            "RETURN_TYPE" => return_type.as_str(),
+        },
+        false,
     )
 }
 
@@ -296,16 +283,17 @@ fn render_method(engine: &TemplateEngine, method: &Method, current_module: &Modu
     let parameters = render_parameters(&method.callable.positional_parameters, current_module);
     let type_parameters = render_type_parameters(&method.callable.type_parameters, current_module);
     let return_type = render_type_annotation(&method.callable.return_type, current_module);
-    render_template(
-        engine,
+    let body = render_not_implemented_body();
+    engine.render(
         CALLEE_METHOD_DECLARATION,
-        &[
-            ("NAME", method.name.clone()),
-            ("TYPE_PARAMETERS", type_parameters),
-            ("PARAMETERS", parameters),
-            ("RETURN_TYPE", return_type),
-            ("BODY", render_not_implemented_body()),
-        ],
+        &crate::map! {
+            "NAME" => method.name.as_str(),
+            "TYPE_PARAMETERS" => type_parameters.as_str(),
+            "PARAMETERS" => parameters.as_str(),
+            "RETURN_TYPE" => return_type.as_str(),
+            "BODY" => body.as_str(),
+        },
+        false,
     )
 }
 
@@ -317,16 +305,17 @@ fn render_static_method(
     let parameters = render_parameters(&method.callable.positional_parameters, current_module);
     let type_parameters = render_type_parameters(&method.callable.type_parameters, current_module);
     let return_type = render_type_annotation(&method.callable.return_type, current_module);
-    render_template(
-        engine,
+    let body = render_not_implemented_body();
+    engine.render(
         CALLEE_STATIC_METHOD_DECLARATION,
-        &[
-            ("NAME", method.name.clone()),
-            ("TYPE_PARAMETERS", type_parameters),
-            ("PARAMETERS", parameters),
-            ("RETURN_TYPE", return_type),
-            ("BODY", render_not_implemented_body()),
-        ],
+        &crate::map! {
+            "NAME" => method.name.as_str(),
+            "TYPE_PARAMETERS" => type_parameters.as_str(),
+            "PARAMETERS" => parameters.as_str(),
+            "RETURN_TYPE" => return_type.as_str(),
+            "BODY" => body.as_str(),
+        },
+        false,
     )
 }
 
@@ -343,16 +332,17 @@ fn render_named_constructor(
         &Type::Composite(TypePath::new(current_module.clone(), type_name.to_string())),
         current_module,
     );
-    render_template(
-        engine,
+    let body = render_not_implemented_body();
+    engine.render(
         CALLEE_STATIC_NAMED_CONSTRUCTOR_DECLARATION,
-        &[
-            ("NAME", constructor.name.clone()),
-            ("TYPE_PARAMETERS", type_parameters),
-            ("PARAMETERS", parameters),
-            ("RETURN_TYPE", return_type),
-            ("BODY", render_not_implemented_body()),
-        ],
+        &crate::map! {
+            "NAME" => constructor.name.as_str(),
+            "TYPE_PARAMETERS" => type_parameters.as_str(),
+            "PARAMETERS" => parameters.as_str(),
+            "RETURN_TYPE" => return_type.as_str(),
+            "BODY" => body.as_str(),
+        },
+        false,
     )
 }
 
@@ -365,16 +355,16 @@ fn render_method_case(
 ) -> String {
     let arguments = render_call_arguments(&method.callable.positional_parameters, module_path);
     let return_kind = render_result_kind(&method.callable.return_type);
-    render_template(
-        engine,
+    engine.render(
         CALLEE_METHOD_CASE,
-        &[
-            ("METHOD_NAME", method.name.clone()),
-            ("MODULE_NAMESPACE", module_namespace.to_string()),
-            ("TYPE_NAME", definition.name.clone()),
-            ("ARGUMENTS", arguments),
-            ("RETURN_KIND", return_kind.to_string()),
-        ],
+        &crate::map! {
+            "METHOD_NAME" => method.name.as_str(),
+            "MODULE_NAMESPACE" => module_namespace,
+            "TYPE_NAME" => definition.name.as_str(),
+            "ARGUMENTS" => arguments.as_str(),
+            "RETURN_KIND" => return_kind,
+        },
+        false,
     )
 }
 
@@ -384,15 +374,16 @@ fn render_request_case(
     definition: &TypeDefinition,
     property: &(String, Type),
 ) -> String {
-    render_template(
-        engine,
+    let return_kind = render_result_kind(&property.1);
+    engine.render(
         CALLEE_REQUEST_CASE,
-        &[
-            ("ACCESSOR", property.0.clone()),
-            ("MODULE_NAMESPACE", module_namespace.to_string()),
-            ("TYPE_NAME", definition.name.clone()),
-            ("RETURN_KIND", render_result_kind(&property.1).to_string()),
-        ],
+        &crate::map! {
+            "ACCESSOR" => property.0.as_str(),
+            "MODULE_NAMESPACE" => module_namespace,
+            "TYPE_NAME" => definition.name.as_str(),
+            "RETURN_KIND" => return_kind,
+        },
+        false,
     )
 }
 
@@ -404,15 +395,15 @@ fn render_update_case(
     current_module: &ModulePath,
 ) -> String {
     let value = render_parameter_decode_expression(&property.1, "value", current_module);
-    render_template(
-        engine,
+    engine.render(
         CALLEE_UPDATE_CASE,
-        &[
-            ("ACCESSOR", property.0.clone()),
-            ("MODULE_NAMESPACE", module_namespace.to_string()),
-            ("TYPE_NAME", definition.name.clone()),
-            ("VALUE", value),
-        ],
+        &crate::map! {
+            "ACCESSOR" => property.0.as_str(),
+            "MODULE_NAMESPACE" => module_namespace,
+            "TYPE_NAME" => definition.name.as_str(),
+            "VALUE" => value.as_str(),
+        },
+        false,
     )
 }
 
@@ -534,10 +525,14 @@ fn render_function_cases(engine: &TemplateEngine, modules: &[&Module]) -> String
                     ));
                 }
             }
-            render_template(
-                engine,
+            let cases = cases.join("\n");
+            engine.render(
                 CALLEE_MODULE_SWITCH,
-                &[("MODULE_PATH", module_path), ("CASES", cases.join("\n"))],
+                &crate::map! {
+                    "MODULE_PATH" => module_path.as_str(),
+                    "CASES" => cases.as_str(),
+                },
+                false,
             )
         })
         .collect::<Vec<_>>()
@@ -573,23 +568,25 @@ fn render_static_method_cases(engine: &TemplateEngine, modules: &[&Module]) -> S
                     ));
                 }
                 if !method_cases.is_empty() {
-                    type_cases.push(render_template(
-                        engine,
+                    let method_cases = method_cases.join("\n");
+                    type_cases.push(engine.render(
                         CALLEE_TYPE_SWITCH,
-                        &[
-                            ("TYPE_NAME", definition.name.clone()),
-                            ("CASES", method_cases.join("\n")),
-                        ],
+                        &crate::map! {
+                            "TYPE_NAME" => definition.name.as_str(),
+                            "CASES" => method_cases.as_str(),
+                        },
+                        false,
                     ));
                 }
             }
-            render_template(
-                engine,
+            let type_cases = type_cases.join("\n");
+            engine.render(
                 CALLEE_STATIC_METHOD_MODULE_SWITCH,
-                &[
-                    ("MODULE_PATH", module_path),
-                    ("TYPE_CASES", type_cases.join("\n")),
-                ],
+                &crate::map! {
+                    "MODULE_PATH" => module_path.as_str(),
+                    "TYPE_CASES" => type_cases.as_str(),
+                },
+                false,
             )
         })
         .collect::<Vec<_>>()
@@ -619,14 +616,14 @@ fn render_method_cases(engine: &TemplateEngine, modules: &[&Module]) -> String {
                     })
                     .collect::<Vec<_>>()
                     .join("\n");
-                Some(render_template(
-                    engine,
+                Some(engine.render(
                     CALLEE_METHOD_BLOCK,
-                    &[
-                        ("MODULE_NAMESPACE", module_namespace.clone()),
-                        ("TYPE_NAME", definition.name.clone()),
-                        ("CASES", method_blocks),
-                    ],
+                    &crate::map! {
+                        "MODULE_NAMESPACE" => module_namespace.as_str(),
+                        "TYPE_NAME" => definition.name.as_str(),
+                        "CASES" => method_blocks.as_str(),
+                    },
+                    false,
                 ))
             })
         })
@@ -651,14 +648,14 @@ fn render_request_cases(engine: &TemplateEngine, modules: &[&Module]) -> String 
                     })
                     .collect::<Vec<_>>()
                     .join("\n");
-                Some(render_template(
-                    engine,
+                Some(engine.render(
                     CALLEE_REQUEST_BLOCK,
-                    &[
-                        ("MODULE_NAMESPACE", module_namespace.clone()),
-                        ("TYPE_NAME", definition.name.clone()),
-                        ("CASES", property_blocks),
-                    ],
+                    &crate::map! {
+                        "MODULE_NAMESPACE" => module_namespace.as_str(),
+                        "TYPE_NAME" => definition.name.as_str(),
+                        "CASES" => property_blocks.as_str(),
+                    },
+                    false,
                 ))
             })
         })
@@ -689,14 +686,14 @@ fn render_update_cases(engine: &TemplateEngine, modules: &[&Module]) -> String {
                     })
                     .collect::<Vec<_>>()
                     .join("\n");
-                Some(render_template(
-                    engine,
+                Some(engine.render(
                     CALLEE_UPDATE_BLOCK,
-                    &[
-                        ("MODULE_NAMESPACE", module_namespace.clone()),
-                        ("TYPE_NAME", definition.name.clone()),
-                        ("CASES", property_blocks),
-                    ],
+                    &crate::map! {
+                        "MODULE_NAMESPACE" => module_namespace.as_str(),
+                        "TYPE_NAME" => definition.name.as_str(),
+                        "CASES" => property_blocks.as_str(),
+                    },
+                    false,
                 ))
             })
         })
@@ -712,18 +709,16 @@ fn render_function_case(
 ) -> String {
     let arguments = render_call_arguments(&function.callable.positional_parameters, module_path);
     let return_kind = render_result_kind(&function.callable.return_type);
-    render_template(
-        engine,
+    let result_expression = format!("serializeValue(result, \"{}\", returnSink)", return_kind);
+    engine.render(
         CALLEE_FUNCTION_CASE,
-        &[
-            ("CALLEE_NAME", function.name.clone()),
-            ("MODULE_NAMESPACE", module_namespace.to_string()),
-            ("ARGUMENTS", arguments),
-            (
-                "RESULT_EXPRESSION",
-                format!("serializeValue(result, \"{}\", returnSink)", return_kind),
-            ),
-        ],
+        &crate::map! {
+            "CALLEE_NAME" => function.name.as_str(),
+            "MODULE_NAMESPACE" => module_namespace,
+            "ARGUMENTS" => arguments.as_str(),
+            "RESULT_EXPRESSION" => result_expression.as_str(),
+        },
+        false,
     )
 }
 
@@ -735,14 +730,14 @@ fn render_constructor_case(
     module_path: &ModulePath,
 ) -> String {
     let arguments = render_call_arguments(&constructor.positional_parameters, module_path);
-    render_template(
-        engine,
+    engine.render(
         CALLEE_CONSTRUCTOR_CASE,
-        &[
-            ("TYPE_NAME", definition.name.clone()),
-            ("MODULE_NAMESPACE", module_namespace.to_string()),
-            ("ARGUMENTS", arguments),
-        ],
+        &crate::map! {
+            "TYPE_NAME" => definition.name.as_str(),
+            "MODULE_NAMESPACE" => module_namespace,
+            "ARGUMENTS" => arguments.as_str(),
+        },
+        false,
     )
 }
 
@@ -755,16 +750,17 @@ fn render_static_method_case(
 ) -> String {
     let arguments = render_call_arguments(&method.callable.positional_parameters, module_path);
     let return_kind = render_result_kind(&method.callable.return_type);
-    render_template(
-        engine,
+    let return_kind = return_kind.to_string();
+    engine.render(
         CALLEE_STATIC_METHOD_CASE,
-        &[
-            ("METHOD_NAME", method.name.clone()),
-            ("TYPE_NAME", definition.name.clone()),
-            ("MODULE_NAMESPACE", module_namespace.to_string()),
-            ("ARGUMENTS", arguments),
-            ("RETURN_KIND", return_kind.to_string()),
-        ],
+        &crate::map! {
+            "METHOD_NAME" => method.name.as_str(),
+            "TYPE_NAME" => definition.name.as_str(),
+            "MODULE_NAMESPACE" => module_namespace,
+            "ARGUMENTS" => arguments.as_str(),
+            "RETURN_KIND" => return_kind.as_str(),
+        },
+        false,
     )
 }
 
@@ -776,15 +772,15 @@ fn render_named_constructor_case(
     module_path: &ModulePath,
 ) -> String {
     let arguments = render_call_arguments(&constructor.callable.positional_parameters, module_path);
-    render_template(
-        engine,
+    engine.render(
         CALLEE_STATIC_NAMED_CONSTRUCTOR_CASE,
-        &[
-            ("METHOD_NAME", constructor.name.clone()),
-            ("TYPE_NAME", definition.name.clone()),
-            ("MODULE_NAMESPACE", module_namespace.to_string()),
-            ("ARGUMENTS", arguments),
-        ],
+        &crate::map! {
+            "METHOD_NAME" => constructor.name.as_str(),
+            "TYPE_NAME" => definition.name.as_str(),
+            "MODULE_NAMESPACE" => module_namespace,
+            "ARGUMENTS" => arguments.as_str(),
+        },
+        false,
     )
 }
 
