@@ -50,18 +50,55 @@ impl TemplateEngine {
     /// Renders `input` by replacing placeholders whose keys exist in `values`.
     ///
     /// Placeholders with missing keys are left unchanged.
-    pub fn render(&self, input: &str, values: &HashMap<&str, &str>) -> String {
+    /// The `indent_multiline` parameter controls whether multiline replacements
+    /// are indented to match the indentation of the placeholder in the input text.
+    pub fn render(
+        &self,
+        input: &str,
+        values: &HashMap<&str, &str>,
+        indent_multiline: bool,
+    ) -> String {
         self.placeholder_regex
             .replace_all(input, |caps: &regex::Captures<'_>| {
-                let Some(key_match) = caps.name("key") else {
-                    return caps[0].to_string();
+                let Some(whole_match) = caps.get(0) else {
+                    return String::new();
                 };
 
-                values
+                let Some(key_match) = caps.name("key") else {
+                    return whole_match.as_str().to_string();
+                };
+
+                let replacement = values
                     .get(key_match.as_str())
                     .copied()
-                    .unwrap_or(caps.get(0).map_or("", |m| m.as_str()))
-                    .to_string()
+                    .unwrap_or(whole_match.as_str());
+
+                if !indent_multiline || !replacement.contains('\n') {
+                    return replacement.to_string();
+                }
+
+                let line_start = input[..whole_match.start()]
+                    .rfind('\n')
+                    .map_or(0, |index| index + 1);
+                let line_prefix = &input[line_start..whole_match.start()];
+
+                if !line_prefix
+                    .chars()
+                    .all(|character| character == ' ' || character == '\t')
+                {
+                    return replacement.to_string();
+                }
+
+                let mut rendered = String::with_capacity(replacement.len() + line_prefix.len());
+                for (index, segment) in replacement.split_inclusive('\n').enumerate() {
+                    if index > 0 {
+                        rendered.push_str(line_prefix);
+                    }
+
+                    rendered.push_str(segment);
+                }
+
+                rendered
             })
             .to_string()
     }
@@ -77,7 +114,7 @@ mod tests {
     fn replaces_single_placeholder() {
         let engine = TemplateEngine::new("${name}").expect("pattern should be valid");
         let values = HashMap::from([("name", "Steve")]);
-        let rendered = engine.render("Hello ${name}!", &values);
+        let rendered = engine.render("Hello ${name}!", &values, false);
 
         assert_eq!(rendered, "Hello Steve!");
     }
@@ -86,7 +123,7 @@ mod tests {
     fn replaces_multiple_placeholders() {
         let engine = TemplateEngine::new("${name}").expect("pattern should be valid");
         let values = HashMap::from([("greeting", "Hi"), ("name", "Steve")]);
-        let rendered = engine.render("${greeting}, ${name}. ${greeting} again!", &values);
+        let rendered = engine.render("${greeting}, ${name}. ${greeting} again!", &values, false);
 
         assert_eq!(rendered, "Hi, Steve. Hi again!");
     }
@@ -95,7 +132,7 @@ mod tests {
     fn keeps_unknown_placeholders_unchanged() {
         let engine = TemplateEngine::new("${name}").expect("pattern should be valid");
         let values = HashMap::from([("known", "Alice")]);
-        let rendered = engine.render("Hello ${known} and ${unknown}!", &values);
+        let rendered = engine.render("Hello ${known} and ${unknown}!", &values, false);
 
         assert_eq!(rendered, "Hello Alice and ${unknown}!");
     }
@@ -104,9 +141,29 @@ mod tests {
     fn supports_custom_pattern() {
         let engine = TemplateEngine::new("{{name}}").expect("pattern should be valid");
         let values = HashMap::from([("first", "Ada"), ("last", "Lovelace")]);
-        let rendered = engine.render("{{first}} {{last}}", &values);
+        let rendered = engine.render("{{first}} {{last}}", &values, false);
 
         assert_eq!(rendered, "Ada Lovelace");
+    }
+
+    #[test]
+    fn indents_multiline_replacements_when_enabled() {
+        let engine = TemplateEngine::new("${name}").expect("pattern should be valid");
+        let values = HashMap::from([("name", "first\nsecond\nthird")]);
+
+        let rendered = engine.render("    ${name}", &values, true);
+
+        assert_eq!(rendered, "    first\n    second\n    third");
+    }
+
+    #[test]
+    fn leaves_multiline_replacements_unindented_when_disabled() {
+        let engine = TemplateEngine::new("${name}").expect("pattern should be valid");
+        let values = HashMap::from([("name", "first\nsecond")]);
+
+        let rendered = engine.render("    ${name}", &values, false);
+
+        assert_eq!(rendered, "    first\nsecond");
     }
 
     #[test]
