@@ -1,8 +1,7 @@
 use std::{collections::HashMap, path::PathBuf};
 
 use crate::{
-    codegen::CodegenOutput,
-    codegen::template::TemplateEngine,
+    codegen::{CodegenOutput, template::TemplateEngine},
     features::{
         AnonymousCallable, FunctionDefinition, Method, Module, PrimitiveType, Type, TypeDefinition,
         TypeParameter, ValueParameter,
@@ -17,15 +16,26 @@ const CALLER_PACKAGE_JSON: &str = include_str!("./assets/caller/package.json");
 const CALLER_PACKAGE_LOCK_JSON: &str = include_str!("./assets/caller/package-lock.json");
 const CALLER_MAIN: &str = include_str!("./assets/caller/main.ts");
 const CALLER_INDEX: &str = include_str!("./assets/caller/index.ts");
+const CALLER_FUNCTION_STUB: &str = include_str!("./assets/caller/function_stub.ts");
+const CALLER_CLASS_STUB: &str = include_str!("./assets/caller/class_stub.ts");
+const CALLER_CONSTRUCTOR_STUB: &str = include_str!("./assets/caller/constructor_stub.ts");
+const CALLER_REFERENCE_FACTORY: &str = include_str!("./assets/caller/reference_factory.ts");
+const CALLER_PROPERTY_GETTER: &str = include_str!("./assets/caller/property_getter.ts");
+const CALLER_PROPERTY_SETTER: &str = include_str!("./assets/caller/property_setter.ts");
+const CALLER_METHOD_STUB: &str = include_str!("./assets/caller/method_stub.ts");
+const CALLER_STATIC_METHOD_STUB: &str = include_str!("./assets/caller/static_method_stub.ts");
+const CALLER_STATIC_NAMED_CONSTRUCTOR_STUB: &str =
+    include_str!("./assets/caller/static_named_constructor_stub.ts");
+const CALLER_CALL_FUNCTION_BODY: &str = include_str!("./assets/caller/call_function_body.ts");
+const CALLER_CALL_METHOD_BODY: &str = include_str!("./assets/caller/call_method_body.ts");
 
 pub fn generate_caller(modules: Vec<&Module>) -> Vec<CodegenOutput> {
-    let stubs = render_caller_stubs(&modules);
-    let engine = TemplateEngine::new("/* {{NAME}} */").expect("failed to compile caller template");
-    let rendered_index = engine.render(
-        CALLER_INDEX,
-        &HashMap::from([("STUBS", stubs.as_str())]),
-        true,
-    );
+    let engine =
+        TemplateEngine::new("/* {{NAME}} */").expect("failed to compile template placeholder");
+
+    let stubs = render_caller_stubs(&engine, &modules);
+    let rendered_index = render_template(&engine, CALLER_INDEX, &[("STUBS", stubs)]);
+
     vec![
         CodegenOutput {
             path: PathBuf::from("ffi/socket.ts"),
@@ -55,7 +65,6 @@ pub fn generate_caller(modules: Vec<&Module>) -> Vec<CodegenOutput> {
 }
 
 pub fn generate_callee(modules: Vec<&Module>) -> Vec<CodegenOutput> {
-    // dummy implementation
     modules
         .into_iter()
         .map(|module| CodegenOutput {
@@ -68,211 +77,320 @@ pub fn generate_callee(modules: Vec<&Module>) -> Vec<CodegenOutput> {
         .collect()
 }
 
-fn render_caller_stubs(modules: &[&Module]) -> String {
+fn render_template(
+    engine: &TemplateEngine,
+    template: &str,
+    replacements: &[(&str, String)],
+) -> String {
+    let mut rendered = template.to_owned();
+
+    for (name, replacement) in replacements {
+        rendered = engine.render(
+            &rendered,
+            &HashMap::from([(*name, replacement.as_str())]),
+            false,
+        );
+    }
+
+    rendered
+}
+
+fn render_caller_stubs(engine: &TemplateEngine, modules: &[&Module]) -> String {
     let mut stubs = Vec::new();
+
     for module in modules {
         let module_path = module.path.format(".");
+
         for function in &module.functions {
-            stubs.push(render_function_stub(&module_path, function));
+            stubs.push(render_function_stub(engine, &module_path, function));
         }
+
         for definition in &module.types {
-            stubs.push(render_type_stub(&module_path, definition));
+            stubs.push(render_type_stub(engine, &module_path, definition));
         }
     }
+
     stubs.join("\n\n")
 }
 
-fn render_function_stub(module_path: &str, function: &FunctionDefinition) -> String {
-    render_call_like_stub(
-        &format!("export function {}", function.name),
-        &function.callable,
-        &render_call_body(
-            module_path,
-            &function.name,
-            &function.callable,
-            &function.callable.return_type,
-            false,
-            None,
-        ),
-        &render_type_parameters(&function.callable.type_parameters),
-        &render_type_annotation(&function.callable.return_type),
+fn render_function_stub(
+    engine: &TemplateEngine,
+    module_path: &str,
+    function: &FunctionDefinition,
+) -> String {
+    render_template(
+        engine,
+        CALLER_FUNCTION_STUB,
+        &[
+            ("NAME", function.name.clone()),
+            (
+                "TYPE_PARAMETERS",
+                render_type_parameters(&function.callable.type_parameters),
+            ),
+            (
+                "PARAMETERS",
+                render_parameters(&function.callable.positional_parameters),
+            ),
+            (
+                "RETURN_TYPE",
+                render_type_annotation(&function.callable.return_type),
+            ),
+            (
+                "BODY",
+                render_call_body(
+                    engine,
+                    module_path,
+                    &function.name,
+                    &function.callable,
+                    &function.callable.return_type,
+                    false,
+                    None,
+                ),
+            ),
+        ],
     )
 }
 
-fn render_type_stub(module_path: &str, definition: &TypeDefinition) -> String {
-    let mut rendered = String::new();
-    rendered.push_str(&format!("export class {} {{\n", definition.name));
-    rendered.push_str("    readonly uuid: string;\n");
+fn render_type_stub(
+    engine: &TemplateEngine,
+    module_path: &str,
+    definition: &TypeDefinition,
+) -> String {
+    let mut members = Vec::new();
+
     if let Some(constructor) = &definition.default_constructor {
-        rendered.push('\n');
-        rendered.push_str(&render_constructor_stub(
+        members.push(render_constructor_stub(
+            engine,
             module_path,
             &definition.name,
             constructor,
         ));
     }
-    rendered.push('\n');
-    rendered.push_str(&render_reference_factory(&definition.name));
+
+    members.push(render_reference_factory(engine, &definition.name));
+
     for property in &definition.properties {
-        rendered.push('\n');
-        rendered.push_str(&render_property_getter(&definition.name, property));
-        rendered.push('\n');
-        rendered.push_str(&render_property_setter(&property.0, &property.1));
+        members.push(render_property_getter(engine, &definition.name, property));
+        members.push(render_property_setter(engine, &property.0, &property.1));
     }
+
     for method in &definition.methods {
-        rendered.push('\n');
-        rendered.push_str(&render_method_stub(&definition.name, method));
+        members.push(render_method_stub(engine, &definition.name, method));
     }
+
     for method in &definition.static_methods {
-        rendered.push('\n');
-        rendered.push_str(&render_static_method_stub(
+        members.push(render_static_method_stub(
+            engine,
             module_path,
             &definition.name,
             method,
         ));
     }
+
     for constructor in &definition.named_constructors {
-        rendered.push('\n');
-        rendered.push_str(&render_static_named_constructor_stub(
+        members.push(render_static_named_constructor_stub(
+            engine,
             module_path,
             &definition.name,
             constructor,
         ));
     }
-    rendered.push_str("\n}\n");
-    rendered
+
+    render_template(
+        engine,
+        CALLER_CLASS_STUB,
+        &[
+            ("NAME", definition.name.clone()),
+            ("MEMBERS", members.join("\n")),
+        ],
+    )
 }
 
 fn render_constructor_stub(
+    engine: &TemplateEngine,
     module_path: &str,
     type_name: &str,
     constructor: &AnonymousCallable,
 ) -> String {
-    let parameters = render_parameters(&constructor.positional_parameters);
-    let values = render_parameters_values(&constructor.positional_parameters);
-    let body = format!(
-        "        this.uuid = crypto.randomUUID();\n        const bridge = establishBridge();\n        bridge.send(\n            new CallMessage({{\n                modulePath: \"{module_path}\",\n                callee: {{ kind: \"function\", name: \"{type_name}\" }},\n                returnSink: this.uuid,\n                positional: [{values}],\n                named: new Map(),\n            }}),\n        );\n        const response = bridge.nextMessage();\n        if (response === null) {{\n            throw new Error(\"No response received from the bridge\");\n        }}\n        if (response.kind === \"error\") {{\n            throw (response as ErrorMessage).error.value;\n        }}\n        if (response.kind === \"send\") {{\n            const sendMessage = response as SendMessage;\n            if (sendMessage.reference !== this.uuid) {{\n                throw new Error(\"Mismatched UUID in response\");\n            }}\n            if (sendMessage.value.kind !== \"reference\" || sendMessage.value.value !== this.uuid) {{\n                throw new Error(\"Unexpected message kind or value\");\n            }}\n        }} else {{\n            throw new Error(`Unexpected message kind: ${{response.kind}}`);\n        }}\n        finalizationRegistry.register(this, this.uuid);\n"
-    );
-    format!(
-        "    constructor({parameters}) {{\n{body}    }}\n",
-        parameters = parameters,
-        body = body
+    render_template(
+        engine,
+        CALLER_CONSTRUCTOR_STUB,
+        &[
+            (
+                "PARAMETERS",
+                render_parameters(&constructor.positional_parameters),
+            ),
+            ("MODULE_PATH", module_path.to_string()),
+            ("TYPE_NAME", type_name.to_string()),
+            (
+                "POSITIONAL_VALUES",
+                render_parameters_values(&constructor.positional_parameters),
+            ),
+        ],
     )
 }
 
-fn render_reference_factory(type_name: &str) -> String {
-    format!(
-        "    static __fromReference(uuid: string): {type_name} {{\n        const reference = Object.create({type_name}.prototype) as {type_name} & {{ uuid: string }};\n        reference.uuid = uuid;\n        finalizationRegistry.register(reference, uuid);\n        return reference;\n    }}\n"
+fn render_reference_factory(engine: &TemplateEngine, type_name: &str) -> String {
+    render_template(
+        engine,
+        CALLER_REFERENCE_FACTORY,
+        &[("NAME", type_name.to_string())],
     )
 }
 
-fn render_property_getter(type_name: &str, property: &(String, Type)) -> String {
-    let property_type = render_type_annotation(&property.1);
-    let response = render_response_body(&property.1, type_name, "sendMessage.value", false);
-    format!(
-        "    get {name}(): {property_type} {{\n        const returnSink = crypto.randomUUID();\n        const bridge = establishBridge();\n        bridge.send(\n            new RequestMessage({{\n                parent: this.uuid,\n                accessor: \"{name}\",\n                valueSink: returnSink,\n            }}),\n        );\n        const response = bridge.nextMessage();\n        if (response === null) {{\n            throw new Error(\"No response received from the bridge\");\n        }}\n        if (response.kind === \"error\") {{\n            throw (response as ErrorMessage).error.value;\n        }}\n        if (response.kind === \"send\") {{\n            const sendMessage = response as SendMessage;\n            if (sendMessage.reference !== returnSink) {{\n                throw new Error(\"Mismatched UUID in response\");\n            }}\n{response}\n        }}\n        throw new Error(`Unexpected message kind: ${{response.kind}}`);\n    }}",
-        name = property.0,
-        property_type = property_type,
-        response = indent_block(&response, 3)
+fn render_property_getter(
+    engine: &TemplateEngine,
+    type_name: &str,
+    property: &(String, Type),
+) -> String {
+    render_template(
+        engine,
+        CALLER_PROPERTY_GETTER,
+        &[
+            ("NAME", property.0.clone()),
+            ("RETURN_TYPE", render_type_annotation(&property.1)),
+            (
+                "BODY",
+                render_response_body(&property.1, type_name, "sendMessage.value"),
+            ),
+        ],
     )
 }
 
-fn render_property_setter(name: &str, property_type: &Type) -> String {
-    let value_type = render_type_annotation(property_type);
-    let value = render_parameter_value_expression(property_type, "value");
-    format!(
-        "    set {name}(value: {value_type}) {{\n        const acknowledgeSink = crypto.randomUUID();\n        const bridge = establishBridge();\n        bridge.send(\n            new UpdateMessage({{\n                parent: this.uuid,\n                accessor: \"{name}\",\n                acknowledgeSink: acknowledgeSink,\n                value: {value},\n            }}),\n        );\n        const response = bridge.nextMessage();\n        if (response === null) {{\n            throw new Error(\"No response received from the bridge\");\n        }}\n        if (response.kind === \"error\") {{\n            throw (response as ErrorMessage).error.value;\n        }}\n        if (response.kind === \"acknowledge\") {{\n            const acknowledgeMessage = response as AcknowledgeMessage;\n            if (acknowledgeMessage.reference !== acknowledgeSink) {{\n                throw new Error(\"Mismatched UUID in response\");\n            }}\n            return;\n        }}\n        throw new Error(`Unexpected message kind: ${{response.kind}}`);\n    }}",
-        name = name,
-        value_type = value_type,
-        value = value
+fn render_property_setter(engine: &TemplateEngine, name: &str, property_type: &Type) -> String {
+    render_template(
+        engine,
+        CALLER_PROPERTY_SETTER,
+        &[
+            ("NAME", name.to_string()),
+            ("VALUE_TYPE", render_type_annotation(property_type)),
+            (
+                "VALUE",
+                render_parameter_value_expression(property_type, "value"),
+            ),
+        ],
     )
 }
 
-fn render_method_stub(type_name: &str, method: &Method) -> String {
-    render_call_like_stub(
-        &format!("    {}", method.name),
-        &method.callable,
-        &render_call_body(
-            "",
-            &method.name,
-            &method.callable,
-            &method.callable.return_type,
-            false,
-            Some(type_name),
-        ),
-        &render_type_parameters(&method.callable.type_parameters),
-        &render_type_annotation(&method.callable.return_type),
+fn render_method_stub(engine: &TemplateEngine, type_name: &str, method: &Method) -> String {
+    render_template(
+        engine,
+        CALLER_METHOD_STUB,
+        &[
+            ("NAME", method.name.clone()),
+            (
+                "TYPE_PARAMETERS",
+                render_type_parameters(&method.callable.type_parameters),
+            ),
+            (
+                "PARAMETERS",
+                render_parameters(&method.callable.positional_parameters),
+            ),
+            (
+                "RETURN_TYPE",
+                render_type_annotation(&method.callable.return_type),
+            ),
+            (
+                "BODY",
+                render_call_body(
+                    engine,
+                    "",
+                    &method.name,
+                    &method.callable,
+                    &method.callable.return_type,
+                    false,
+                    Some(type_name),
+                ),
+            ),
+        ],
     )
-    .replacen("export function", "", 1)
 }
 
-fn render_static_method_stub(module_path: &str, type_name: &str, method: &Method) -> String {
-    let signature_name = format!("static {}", method.name);
-    let body = render_call_body(
-        module_path,
-        &format!("{}.{}", type_name, method.name),
-        &method.callable,
-        &method.callable.return_type,
-        false,
-        Some(type_name),
-    );
-    format!(
-        "    {signature_name}{type_parameters}({parameters}): {return_type} {{\n{body}    }}\n",
-        signature_name = signature_name,
-        type_parameters = render_type_parameters(&method.callable.type_parameters),
-        parameters = render_parameters(&method.callable.positional_parameters),
-        return_type = render_type_annotation(&method.callable.return_type),
-        body = body,
+fn render_static_method_stub(
+    engine: &TemplateEngine,
+    module_path: &str,
+    type_name: &str,
+    method: &Method,
+) -> String {
+    render_template(
+        engine,
+        CALLER_STATIC_METHOD_STUB,
+        &[
+            ("NAME", method.name.clone()),
+            (
+                "TYPE_PARAMETERS",
+                render_type_parameters(&method.callable.type_parameters),
+            ),
+            (
+                "PARAMETERS",
+                render_parameters(&method.callable.positional_parameters),
+            ),
+            (
+                "RETURN_TYPE",
+                render_type_annotation(&method.callable.return_type),
+            ),
+            (
+                "BODY",
+                render_call_body(
+                    engine,
+                    module_path,
+                    &format!("{}.{}", type_name, method.name),
+                    &method.callable,
+                    &method.callable.return_type,
+                    false,
+                    Some(type_name),
+                ),
+            ),
+        ],
     )
 }
 
 fn render_static_named_constructor_stub(
+    engine: &TemplateEngine,
     module_path: &str,
     type_name: &str,
     constructor: &FunctionDefinition,
 ) -> String {
-    let body = render_call_body(
-        module_path,
-        &format!("{}.{}", type_name, constructor.name),
-        &constructor.callable,
-        &Type::Composite(crate::features::TypePath::new(
-            crate::features::ModulePath::empty(),
-            type_name.to_string(),
-        )),
-        false,
-        Some(type_name),
-    );
-    format!(
-        "    static {name}{type_parameters}({parameters}): {return_type} {{\n{body}    }}\n",
-        name = constructor.name,
-        type_parameters = render_type_parameters(&constructor.callable.type_parameters),
-        parameters = render_parameters(&constructor.callable.positional_parameters),
-        return_type = render_type_annotation(&Type::Composite(crate::features::TypePath::new(
-            crate::features::ModulePath::empty(),
-            type_name.to_string(),
-        ))),
-        body = body,
-    )
-}
+    let return_type = render_type_annotation(&Type::Composite(crate::features::TypePath::new(
+        crate::features::ModulePath::empty(),
+        type_name.to_string(),
+    )));
 
-fn render_call_like_stub(
-    signature_prefix: &str,
-    callable: &AnonymousCallable,
-    body: &str,
-    type_parameters: &str,
-    return_type: &str,
-) -> String {
-    format!(
-        "{signature_prefix}{type_parameters}({parameters}): {return_type} {{\n{body}    }}\n",
-        signature_prefix = signature_prefix,
-        type_parameters = type_parameters,
-        parameters = render_parameters(&callable.positional_parameters),
-        return_type = return_type,
-        body = body,
+    render_template(
+        engine,
+        CALLER_STATIC_NAMED_CONSTRUCTOR_STUB,
+        &[
+            ("NAME", constructor.name.clone()),
+            (
+                "TYPE_PARAMETERS",
+                render_type_parameters(&constructor.callable.type_parameters),
+            ),
+            (
+                "PARAMETERS",
+                render_parameters(&constructor.callable.positional_parameters),
+            ),
+            ("RETURN_TYPE", return_type),
+            (
+                "BODY",
+                render_call_body(
+                    engine,
+                    module_path,
+                    &format!("{}.{}", type_name, constructor.name),
+                    &constructor.callable,
+                    &Type::Composite(crate::features::TypePath::new(
+                        crate::features::ModulePath::empty(),
+                        type_name.to_string(),
+                    )),
+                    false,
+                    Some(type_name),
+                ),
+            ),
+        ],
     )
 }
 
 fn render_call_body(
+    engine: &TemplateEngine,
     module_path: &str,
     callee_name: &str,
     callable: &AnonymousCallable,
@@ -281,44 +399,40 @@ fn render_call_body(
     receiver_type_name: Option<&str>,
 ) -> String {
     let positional_values = render_parameters_values(&callable.positional_parameters);
-    let mut body = String::new();
-    if is_method {
-        body.push_str("        const returnSink = crypto.randomUUID();\n        const bridge = establishBridge();\n        bridge.send(\n            new MethodMessage({\n                calledReference: this.uuid,\n                methodName: \"");
-        body.push_str(callee_name);
-        body.push_str(
-            "\",\n                returnSink: returnSink,\n                positional: [",
-        );
-        body.push_str(&positional_values);
-        body.push_str("],\n                named: new Map(),\n            }),\n        );\n");
-    } else {
-        body.push_str("        const returnSink = crypto.randomUUID();\n        const bridge = establishBridge();\n        bridge.send(\n            new CallMessage({\n                modulePath: \"");
-        body.push_str(module_path);
-        body.push_str("\",\n                callee: { kind: \"function\", name: \"");
-        body.push_str(callee_name);
-        body.push_str(
-            "\" },\n                returnSink: returnSink,\n                positional: [",
-        );
-        body.push_str(&positional_values);
-        body.push_str("],\n                named: new Map(),\n            }),\n        );\n");
-    }
-    body.push_str("        const response = bridge.nextMessage();\n        if (response === null) {\n            throw new Error(\"No response received from the bridge\");\n        }\n        if (response.kind === \"error\") {\n            throw (response as ErrorMessage).error.value;\n        }\n        if (response.kind === \"send\") {\n            const sendMessage = response as SendMessage;\n            if (sendMessage.reference !== returnSink) {\n                throw new Error(\"Mismatched UUID in response\");\n            }\n");
-    body.push_str(&render_response_body(
+    let response_body = render_response_body(
         return_type,
         receiver_type_name.unwrap_or(callee_name),
         "sendMessage.value",
-        false,
-    ));
-    body.push_str(
-        "        }\n        throw new Error(`Unexpected message kind: ${response.kind}`);\n",
     );
-    body
+
+    if is_method {
+        return render_template(
+            engine,
+            CALLER_CALL_METHOD_BODY,
+            &[
+                ("METHOD_NAME", callee_name.to_string()),
+                ("POSITIONAL_VALUES", positional_values),
+                ("RESPONSE_BODY", response_body),
+            ],
+        );
+    }
+
+    render_template(
+        engine,
+        CALLER_CALL_FUNCTION_BODY,
+        &[
+            ("MODULE_PATH", module_path.to_string()),
+            ("CALLEE_NAME", callee_name.to_string()),
+            ("POSITIONAL_VALUES", positional_values),
+            ("RESPONSE_BODY", response_body),
+        ],
+    )
 }
 
 fn render_response_body(
     return_type: &Type,
     composite_type_name: &str,
     send_message_value: &str,
-    _indent: bool,
 ) -> String {
     match return_type {
         Type::Primitive(PrimitiveType::Number) => format!(
@@ -400,6 +514,7 @@ fn render_parameter_signature(parameter: &ValueParameter) -> String {
         "?"
     };
     let rest = if parameter.variadic { "..." } else { "" };
+
     format!(
         "{rest}{name}{optional}: {type_annotation}",
         rest = rest,
@@ -421,6 +536,7 @@ fn render_type_parameters(parameters: &[TypeParameter]) -> String {
     if parameters.is_empty() {
         return String::new();
     }
+
     let rendered = parameters
         .iter()
         .map(|parameter| match &parameter.default {
@@ -431,21 +547,6 @@ fn render_type_parameters(parameters: &[TypeParameter]) -> String {
         .join(", ");
 
     format!("<{rendered}>")
-}
-
-fn indent_block(content: &str, indentation_level: usize) -> String {
-    let indentation = "    ".repeat(indentation_level);
-    content
-        .lines()
-        .map(|line| {
-            if line.is_empty() {
-                String::new()
-            } else {
-                format!("{indentation}{line}")
-            }
-        })
-        .collect::<Vec<_>>()
-        .join("\n")
 }
 
 #[cfg(test)]
