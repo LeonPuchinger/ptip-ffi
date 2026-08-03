@@ -7,6 +7,7 @@ pub fn register() -> LanguageConfig {
     LanguageConfig {
         name: "TypeScript",
         parse: parser::parse,
-        generate: codegen::generate,
+        generate_caller: codegen::generate_caller,
+        generate_callee: codegen::generate_callee,
     }
 }
