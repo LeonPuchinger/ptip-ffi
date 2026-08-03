@@ -4,8 +4,10 @@ pub struct ModulePath {
 }
 
 impl ModulePath {
-    pub fn new(segments: Vec<String>) -> Self {
-        Self { segments }
+    pub fn new(segments: Vec<&str>) -> Self {
+        Self {
+            segments: segments.into_iter().map(|s| s.to_string()).collect(),
+        }
     }
 
     pub fn empty() -> Self {

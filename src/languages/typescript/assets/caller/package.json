@@ -1,0 +1,11 @@
+{
+  "name": "@ptip-ffi-output/caller",
+  "description": "A transparent wrapper around a library using ptip-ffi.",
+  "version": "0.0.1",
+  "main": "index.ts",
+  "type": "module",
+  "dependencies": {
+    "sync-child-process": "^1.0.2",
+    "synchronous-socket": "github:leonpuchinger/synchronous-socket#feat-n-api"
+  }
+}
