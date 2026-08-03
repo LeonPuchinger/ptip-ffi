@@ -1,11 +1,11 @@
 use crate::{config::LanguageConfig, error::PTIPFFIError};
 
+mod codegen;
 mod config;
 mod error;
 mod features;
 mod languages;
 mod parser;
-mod template;
 mod util;
 
 pub fn initialize() -> Vec<LanguageConfig> {
