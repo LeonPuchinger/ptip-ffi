@@ -1,10 +1,10 @@
-use std::{collections::BTreeSet, path::PathBuf};
+use std::path::PathBuf;
 
 use crate::{
     codegen::{CodegenOutput, template::TemplateEngine},
     features::{
         AnonymousCallable, FunctionDefinition, Method, Module, ModulePath, PrimitiveType, Type,
-        TypeDefinition, TypeParameter, TypePath, ValueParameter,
+        TypeDefinition, ValueParameter,
     },
 };
 
@@ -15,15 +15,6 @@ const CALLEE_PACKAGE_JSON: &str = include_str!("./assets/callee/package.json");
 const CALLEE_PACKAGE_LOCK_JSON: &str = include_str!("./assets/callee/package-lock.json");
 const CALLEE_MAIN: &str = include_str!("./assets/callee/main.ts");
 const CALLEE_DISPATCH: &str = include_str!("./assets/callee/dispatch.ts");
-const CALLEE_LIBRARY_INDEX: &str = include_str!("./assets/callee/library/index.ts");
-const CALLEE_FUNCTION_DECLARATION: &str = include_str!("./assets/callee/function.ts");
-const CALLEE_CLASS_DECLARATION: &str = include_str!("./assets/callee/class.ts");
-const CALLEE_CONSTRUCTOR_DECLARATION: &str = include_str!("./assets/callee/constructor.ts");
-const CALLEE_METHOD_DECLARATION: &str = include_str!("./assets/callee/method.ts");
-const CALLEE_STATIC_METHOD_DECLARATION: &str = include_str!("./assets/callee/static_method.ts");
-const CALLEE_STATIC_NAMED_CONSTRUCTOR_DECLARATION: &str =
-    include_str!("./assets/callee/static_named_constructor.ts");
-const CALLEE_PROPERTY_DECLARATION: &str = include_str!("./assets/callee/property.ts");
 const CALLEE_FUNCTION_CASE: &str = include_str!("./assets/callee/function_case.ts");
 const CALLEE_CONSTRUCTOR_CASE: &str = include_str!("./assets/callee/constructor_case.ts");
 const CALLEE_STATIC_METHOD_CASE: &str = include_str!("./assets/callee/static_method_case.ts");
@@ -43,9 +34,8 @@ const CALLEE_UPDATE_BLOCK: &str = include_str!("./assets/callee/update_block.ts"
 pub fn generate_callee(modules: Vec<&Module>) -> Vec<CodegenOutput> {
     let engine =
         TemplateEngine::new("/* {{NAME}} */").expect("failed to compile template placeholder");
-    let rendered_modules = render_callee_modules(&engine, &modules);
     let rendered_dispatch = render_dispatch(&engine, &modules);
-    let mut outputs = vec![
+    vec![
         CodegenOutput {
             path: PathBuf::from("bridge.ts"),
             content: BRIDGE_IMPLEMENTATION.to_owned(),
@@ -70,36 +60,7 @@ pub fn generate_callee(modules: Vec<&Module>) -> Vec<CodegenOutput> {
             path: PathBuf::from("dispatch.ts"),
             content: rendered_dispatch,
         },
-    ];
-    outputs.extend(rendered_modules);
-    outputs
-}
-
-fn render_callee_modules(engine: &TemplateEngine, modules: &[&Module]) -> Vec<CodegenOutput> {
-    modules
-        .iter()
-        .map(|module| CodegenOutput {
-            path: callee_module_output_path(&module.path),
-            content: render_callee_module(engine, module, modules),
-        })
-        .collect()
-}
-
-fn render_callee_module(
-    engine: &TemplateEngine,
-    module: &Module,
-    all_modules: &[&Module],
-) -> String {
-    let imports = render_module_imports(module, all_modules);
-    let declarations = render_module_declarations(engine, module);
-    engine.render(
-        CALLEE_LIBRARY_INDEX,
-        &crate::map! {
-            "IMPORTS" => imports.as_str(),
-            "DECLARATIONS" => declarations.as_str(),
-        },
-        false,
-    )
+    ]
 }
 
 fn render_dispatch(engine: &TemplateEngine, modules: &[&Module]) -> String {
@@ -123,34 +84,6 @@ fn render_dispatch(engine: &TemplateEngine, modules: &[&Module]) -> String {
     )
 }
 
-fn render_module_imports(module: &Module, all_modules: &[&Module]) -> String {
-    let mut dependencies = BTreeSet::new();
-    for function in &module.functions {
-        collect_callable_dependencies(&function.callable, &module.path, &mut dependencies);
-    }
-    for definition in &module.types {
-        collect_type_definition_dependencies(definition, &module.path, &mut dependencies);
-    }
-    let mut imports = Vec::new();
-    for dependency in dependencies {
-        if dependency == module.path.format("/") {
-            continue;
-        }
-
-        if let Some(target) = all_modules
-            .iter()
-            .find(|candidate| candidate.path.format("/") == dependency)
-        {
-            imports.push(format!(
-                "import * as {} from \"{}\";",
-                module_namespace_name(&target.path),
-                module_import_path(&module.path, &target.path)
-            ));
-        }
-    }
-    imports.join("\n")
-}
-
 fn render_dispatch_imports(modules: &[&Module]) -> String {
     modules
         .iter()
@@ -163,181 +96,6 @@ fn render_dispatch_imports(modules: &[&Module]) -> String {
         })
         .collect::<Vec<_>>()
         .join("\n")
-}
-
-fn render_module_declarations(engine: &TemplateEngine, module: &Module) -> String {
-    let mut declarations = Vec::new();
-    for function in &module.functions {
-        declarations.push(render_function_declaration(engine, function, &module.path));
-    }
-    for definition in &module.types {
-        declarations.push(render_type_definition(engine, definition, &module.path));
-    }
-    declarations.join("\n\n")
-}
-
-fn render_function_declaration(
-    engine: &TemplateEngine,
-    function: &FunctionDefinition,
-    current_module: &ModulePath,
-) -> String {
-    let parameters = render_parameters(&function.callable.positional_parameters, current_module);
-    let type_parameters =
-        render_type_parameters(&function.callable.type_parameters, current_module);
-    let return_type = render_type_annotation(&function.callable.return_type, current_module);
-    let body = render_not_implemented_body();
-    engine.render(
-        CALLEE_FUNCTION_DECLARATION,
-        &crate::map! {
-            "NAME" => function.name.as_str(),
-            "TYPE_PARAMETERS" => type_parameters.as_str(),
-            "PARAMETERS" => parameters.as_str(),
-            "RETURN_TYPE" => return_type.as_str(),
-            "BODY" => body.as_str(),
-        },
-        false,
-    )
-}
-
-fn render_type_definition(
-    engine: &TemplateEngine,
-    definition: &TypeDefinition,
-    current_module: &ModulePath,
-) -> String {
-    let type_parameters = render_type_parameters(&definition.type_parameters, current_module);
-    let implements = render_implements_clause(&definition.implements, current_module);
-    let mut members = Vec::new();
-    if let Some(constructor) = &definition.default_constructor {
-        members.push(render_constructor(engine, constructor, current_module));
-    }
-    for property in &definition.properties {
-        members.push(render_property(engine, property, current_module));
-    }
-    for method in &definition.methods {
-        members.push(render_method(engine, method, current_module));
-    }
-    for method in &definition.static_methods {
-        members.push(render_static_method(engine, method, current_module));
-    }
-    for constructor in &definition.named_constructors {
-        members.push(render_named_constructor(
-            engine,
-            constructor,
-            current_module,
-            &definition.name,
-        ));
-    }
-    let members = members.join("\n");
-    engine.render(
-        CALLEE_CLASS_DECLARATION,
-        &crate::map! {
-            "NAME" => definition.name.as_str(),
-            "TYPE_PARAMETERS" => type_parameters.as_str(),
-            "IMPLEMENTS" => implements.as_str(),
-            "MEMBERS" => members.as_str(),
-        },
-        false,
-    )
-}
-
-fn render_constructor(
-    engine: &TemplateEngine,
-    constructor: &AnonymousCallable,
-    current_module: &ModulePath,
-) -> String {
-    let parameters = render_parameters(&constructor.positional_parameters, current_module);
-    let body = render_not_implemented_body();
-    engine.render(
-        CALLEE_CONSTRUCTOR_DECLARATION,
-        &crate::map! {
-            "PARAMETERS" => parameters.as_str(),
-            "BODY" => body.as_str(),
-        },
-        false,
-    )
-}
-
-fn render_property(
-    engine: &TemplateEngine,
-    property: &(String, Type),
-    current_module: &ModulePath,
-) -> String {
-    let return_type = render_type_annotation(&property.1, current_module);
-    engine.render(
-        CALLEE_PROPERTY_DECLARATION,
-        &crate::map! {
-            "NAME" => property.0.as_str(),
-            "RETURN_TYPE" => return_type.as_str(),
-        },
-        false,
-    )
-}
-
-fn render_method(engine: &TemplateEngine, method: &Method, current_module: &ModulePath) -> String {
-    let parameters = render_parameters(&method.callable.positional_parameters, current_module);
-    let type_parameters = render_type_parameters(&method.callable.type_parameters, current_module);
-    let return_type = render_type_annotation(&method.callable.return_type, current_module);
-    let body = render_not_implemented_body();
-    engine.render(
-        CALLEE_METHOD_DECLARATION,
-        &crate::map! {
-            "NAME" => method.name.as_str(),
-            "TYPE_PARAMETERS" => type_parameters.as_str(),
-            "PARAMETERS" => parameters.as_str(),
-            "RETURN_TYPE" => return_type.as_str(),
-            "BODY" => body.as_str(),
-        },
-        false,
-    )
-}
-
-fn render_static_method(
-    engine: &TemplateEngine,
-    method: &Method,
-    current_module: &ModulePath,
-) -> String {
-    let parameters = render_parameters(&method.callable.positional_parameters, current_module);
-    let type_parameters = render_type_parameters(&method.callable.type_parameters, current_module);
-    let return_type = render_type_annotation(&method.callable.return_type, current_module);
-    let body = render_not_implemented_body();
-    engine.render(
-        CALLEE_STATIC_METHOD_DECLARATION,
-        &crate::map! {
-            "NAME" => method.name.as_str(),
-            "TYPE_PARAMETERS" => type_parameters.as_str(),
-            "PARAMETERS" => parameters.as_str(),
-            "RETURN_TYPE" => return_type.as_str(),
-            "BODY" => body.as_str(),
-        },
-        false,
-    )
-}
-
-fn render_named_constructor(
-    engine: &TemplateEngine,
-    constructor: &FunctionDefinition,
-    current_module: &ModulePath,
-    type_name: &str,
-) -> String {
-    let parameters = render_parameters(&constructor.callable.positional_parameters, current_module);
-    let type_parameters =
-        render_type_parameters(&constructor.callable.type_parameters, current_module);
-    let return_type = render_type_annotation(
-        &Type::Composite(TypePath::new(current_module.clone(), type_name.to_string())),
-        current_module,
-    );
-    let body = render_not_implemented_body();
-    engine.render(
-        CALLEE_STATIC_NAMED_CONSTRUCTOR_DECLARATION,
-        &crate::map! {
-            "NAME" => constructor.name.as_str(),
-            "TYPE_PARAMETERS" => type_parameters.as_str(),
-            "PARAMETERS" => parameters.as_str(),
-            "RETURN_TYPE" => return_type.as_str(),
-            "BODY" => body.as_str(),
-        },
-        false,
-    )
 }
 
 fn render_method_case(
@@ -399,73 +157,6 @@ fn render_update_case(
         },
         false,
     )
-}
-
-fn render_not_implemented_body() -> String {
-    "        throw new Error(\"Not implemented\");".to_string()
-}
-
-fn render_implements_clause(implements: &[TypePath], current_module: &ModulePath) -> String {
-    if implements.is_empty() {
-        return String::new();
-    }
-    let rendered = implements
-        .iter()
-        .map(|r#type| render_type_annotation(&Type::Composite(r#type.clone()), current_module))
-        .collect::<Vec<_>>()
-        .join(", ");
-    format!("implements {}", rendered)
-}
-
-fn render_parameters(parameters: &[ValueParameter], current_module: &ModulePath) -> String {
-    parameters
-        .iter()
-        .map(|parameter| render_parameter_signature(parameter, current_module))
-        .collect::<Vec<_>>()
-        .join(", ")
-}
-
-fn render_parameter_signature(parameter: &ValueParameter, current_module: &ModulePath) -> String {
-    let type_annotation = if parameter.variadic {
-        format!(
-            "{}[]",
-            render_type_annotation(&parameter.r#type, current_module)
-        )
-    } else {
-        render_type_annotation(&parameter.r#type, current_module)
-    };
-    let optional = if parameter.required || parameter.variadic {
-        ""
-    } else {
-        "?"
-    };
-    let rest = if parameter.variadic { "..." } else { "" };
-    format!(
-        "{rest}{name}{optional}: {type_annotation}",
-        rest = rest,
-        name = parameter.name,
-        optional = optional,
-        type_annotation = type_annotation
-    )
-}
-
-fn render_type_parameters(parameters: &[TypeParameter], current_module: &ModulePath) -> String {
-    if parameters.is_empty() {
-        return String::new();
-    }
-    let rendered = parameters
-        .iter()
-        .map(|parameter| match &parameter.default {
-            Some(default) => format!(
-                "{} = {}",
-                parameter.name,
-                render_type_annotation(default, current_module)
-            ),
-            None => parameter.name.clone(),
-        })
-        .collect::<Vec<_>>()
-        .join(", ");
-    format!("<{}>", rendered)
 }
 
 fn render_type_annotation(r#type: &Type, current_module: &ModulePath) -> String {
@@ -825,70 +516,6 @@ fn render_result_kind(r#type: &Type) -> &'static str {
     }
 }
 
-fn collect_callable_dependencies(
-    callable: &AnonymousCallable,
-    current_module: &ModulePath,
-    dependencies: &mut BTreeSet<String>,
-) {
-    for parameter in &callable.positional_parameters {
-        collect_type_dependencies(&parameter.r#type, current_module, dependencies);
-    }
-    collect_type_dependencies(&callable.return_type, current_module, dependencies);
-    for parameter in &callable.type_parameters {
-        if let Some(default) = &parameter.default {
-            collect_type_dependencies(default, current_module, dependencies);
-        }
-    }
-}
-
-fn collect_type_definition_dependencies(
-    definition: &TypeDefinition,
-    current_module: &ModulePath,
-    dependencies: &mut BTreeSet<String>,
-) {
-    for property in &definition.properties {
-        collect_type_dependencies(&property.1, current_module, dependencies);
-    }
-    if let Some(constructor) = &definition.default_constructor {
-        collect_callable_dependencies(constructor, current_module, dependencies);
-    }
-    for method in &definition.methods {
-        collect_callable_dependencies(&method.callable, current_module, dependencies);
-    }
-    for method in &definition.static_methods {
-        collect_callable_dependencies(&method.callable, current_module, dependencies);
-    }
-    for constructor in &definition.named_constructors {
-        collect_callable_dependencies(&constructor.callable, current_module, dependencies);
-    }
-    for implemented in &definition.implements {
-        if implemented.module_path.format("/") != current_module.format("/") {
-            dependencies.insert(implemented.module_path.format("/"));
-        }
-    }
-}
-
-fn collect_type_dependencies(
-    r#type: &Type,
-    current_module: &ModulePath,
-    dependencies: &mut BTreeSet<String>,
-) {
-    match r#type {
-        Type::Primitive(_) | Type::Dynamic => {}
-        Type::Composite(path) => {
-            if path.module_path.format("/") != current_module.format("/") {
-                dependencies.insert(path.module_path.format("/"));
-            }
-        }
-        Type::Array(inner) => collect_type_dependencies(inner, current_module, dependencies),
-        Type::Tuple(elements) => {
-            for element in elements {
-                collect_type_dependencies(element, current_module, dependencies);
-            }
-        }
-    }
-}
-
 fn module_namespace_name(module_path: &ModulePath) -> String {
     if module_path.segments.is_empty() {
         return "library_root".to_string();
@@ -951,17 +578,10 @@ fn module_import_path(from_module: &ModulePath, target_module: &ModulePath) -> S
     path
 }
 
-fn callee_module_output_path(module_path: &ModulePath) -> PathBuf {
-    let mut path = PathBuf::from("library");
-    for segment in &module_path.segments {
-        path.push(segment);
-    }
-    path.push("index.ts");
-    path
-}
-
 #[cfg(test)]
 mod tests {
+    use crate::features::TypePath;
+
     use super::*;
 
     fn number_parameter(name: &str) -> ValueParameter {
