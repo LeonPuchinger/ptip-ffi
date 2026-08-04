@@ -1,3 +1,5 @@
+use std::path::Path;
+
 use ptip_ffi::{generate, initialize};
 
 const EXAMPLE_TS_INPUT: &str = r#"
@@ -13,5 +15,14 @@ fn main() {
     }
 
     // TypeScript is the only language currently supported, so we use it for both input and output.
-    let _ = generate(EXAMPLE_TS_INPUT, "TypeScript", "TypeScript", &registry);
+    if let Err(e) = generate(
+        &registry,
+        EXAMPLE_TS_INPUT,
+        "TypeScript",
+        "TypeScript",
+        Path::new("./out/callee"),
+        Path::new("./out/caller"),
+    ) {
+        eprintln!("Error: {:?}", e);
+    }
 }

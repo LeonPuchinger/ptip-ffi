@@ -1,4 +1,6 @@
-use crate::{config::LanguageConfig, error::PTIPFFIError};
+use std::path::Path;
+
+use crate::{codegen::persist_all, config::LanguageConfig, error::PTIPFFIError};
 
 mod codegen;
 mod config;
@@ -13,10 +15,12 @@ pub fn initialize() -> Vec<LanguageConfig> {
 }
 
 pub fn generate(
+    registry: &[LanguageConfig],
     input: &str,
     input_language: &str,
     output_language: &str,
-    registry: &[LanguageConfig],
+    callee_output_root: &Path,
+    caller_output_root: &Path,
 ) -> Result<(), PTIPFFIError> {
     let input_config = registry
         .iter()
@@ -29,5 +33,7 @@ pub fn generate(
     let features = (input_config.parse)(input)?;
     let callee = (input_config.generate_callee)(vec![&features]);
     let caller = (output_config.generate_caller)(vec![&features]);
+    persist_all(&callee, Some(callee_output_root))?;
+    persist_all(&caller, Some(caller_output_root))?;
     Ok(())
 }
