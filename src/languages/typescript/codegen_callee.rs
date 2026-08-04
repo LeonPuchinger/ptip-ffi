@@ -64,13 +64,7 @@ pub fn generate_callee(modules: Vec<&Module>) -> Vec<CodegenOutput> {
         },
         CodegenOutput {
             path: PathBuf::from("main.ts"),
-            content: engine.render(
-                CALLEE_MAIN,
-                &crate::map! {
-                    "SOCKET_PATH" => "/tmp/test_ptip_ffi.sock",
-                },
-                false,
-            ),
+            content: CALLEE_MAIN.to_owned(),
         },
         CodegenOutput {
             path: PathBuf::from("dispatch.ts"),

@@ -2,7 +2,7 @@ import { Bridge } from "./bridge.ts";
 import { dispatchMessage } from "./dispatch.ts";
 import { MessageSocket, SynchronousSocketServer } from "./socket.ts";
 
-const path = "/* {{SOCKET_PATH}} */";
+const path = `/tmp/ptip-ffi-socket-${crypto.randomUUID()}.sock`;
 
 const advertiseSocket = (() => {
     let alreadyAdvertised = false;
