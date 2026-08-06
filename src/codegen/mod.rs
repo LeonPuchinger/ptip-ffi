@@ -35,3 +35,26 @@ pub fn persist_all(outputs: &[CodegenOutput], output_root: Option<&Path>) -> std
     }
     Ok(())
 }
+
+/// Recursively copy the contents of the source directory to the destination directory.
+pub fn copy_directory(src: &Path, dst: &Path) -> std::io::Result<()> {
+    if !src.is_dir() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            format!("Source path is not a directory: {}", src.display()),
+        ));
+    }
+    std::fs::create_dir_all(dst)?;
+    for entry in std::fs::read_dir(src)? {
+        let entry = entry?;
+        let file_type = entry.file_type()?;
+        let src_path = entry.path();
+        let dst_path = dst.join(entry.file_name());
+        if file_type.is_dir() {
+            copy_directory(&src_path, &dst_path)?;
+        } else if file_type.is_file() {
+            std::fs::copy(&src_path, &dst_path)?;
+        }
+    }
+    Ok(())
+}
