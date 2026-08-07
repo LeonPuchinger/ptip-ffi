@@ -1,30 +1,6 @@
-import { createRequire } from "node:module";
+import { SynchronousSocket as NativeSynchronousSocket, SynchronousSocketServer as NativeSynchronousSocketServer } from "synchronous-socket";
 
 type Bytes = Uint8Array<ArrayBufferLike>;
-
-type NativeSynchronousSocket = {
-  readIntoBuffer(buffer: Bytes): number | null;
-  writeFromBuffer(buffer: Bytes): number;
-  connect(): void;
-  disconnect(): void;
-};
-
-type NativeSynchronousSocketServer = {
-  listen(): void;
-  accept(): NativeSynchronousSocket;
-  close(): void;
-};
-
-type NativeSocketModule = {
-  SynchronousSocket: new (path: string) => NativeSynchronousSocket;
-  SynchronousSocketServer: new (path: string) => NativeSynchronousSocketServer;
-};
-
-const require = createRequire(import.meta.url);
-
-function loadNativeSocketModule(): NativeSocketModule {
-  return require("synchronous-socket") as NativeSocketModule;
-}
 
 /**
  * An abstraction over a synchronous byte stream that can be used for communication over a socket or similar transport.
@@ -49,8 +25,7 @@ export class SynchronousSocket implements SynchronousStream {
   }
 
   static fromPath(path: string) {
-    const { SynchronousSocket } = loadNativeSocketModule();
-    const socket = new SynchronousSocket(path);
+    const socket = new NativeSynchronousSocket(path);
     socket.connect();
     return new SynchronousSocket(socket);
   }
@@ -76,8 +51,7 @@ export class SynchronousSocketServer {
   private server: NativeSynchronousSocketServer;
 
   constructor(path: string) {
-    const { SynchronousSocketServer } = loadNativeSocketModule();
-    this.server = new SynchronousSocketServer(path);
+    this.server = new NativeSynchronousSocketServer(path);
     this.server.listen();
   }
 
