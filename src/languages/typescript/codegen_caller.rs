@@ -119,6 +119,7 @@ fn render_type_stub(
     definition: &TypeDefinition,
 ) -> String {
     let mut members = Vec::new();
+    members.push("    readonly uuid: string;".to_string());
     if let Some(constructor) = &definition.default_constructor {
         members.push(render_constructor_stub(
             engine,
@@ -151,7 +152,7 @@ fn render_type_stub(
             constructor,
         ));
     }
-    let members = members.join("\n");
+    let members = members.join("\n\n");
     engine.render(
         CALLER_CLASS_STUB,
         &crate::map! {

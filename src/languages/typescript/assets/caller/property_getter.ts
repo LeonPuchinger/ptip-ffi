@@ -21,5 +21,6 @@
                 throw new Error("Mismatched UUID in response");
             }
 /* {{BODY}} */
+        }
         throw new Error(`Unexpected message kind: ${response.kind}`);
     }

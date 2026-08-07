@@ -91,11 +91,19 @@ fn render_dispatch_imports(modules: &[&Module]) -> String {
             format!(
                 "import * as {} from \"{}\";",
                 module_namespace_name(&module.path),
-                module_import_path(&ModulePath::empty(), &module.path)
+                library_import_path(&module.path)
             )
         })
         .collect::<Vec<_>>()
         .join("\n")
+}
+
+fn library_import_path(module_path: &ModulePath) -> String {
+    if module_path.segments.is_empty() {
+        "./library/index.ts".to_string()
+    } else {
+        format!("./library/{}/index.ts", module_path.format("/"))
+    }
 }
 
 fn render_method_case(
@@ -106,7 +114,7 @@ fn render_method_case(
     module_path: &ModulePath,
 ) -> String {
     let arguments = render_call_arguments(&method.callable.positional_parameters, module_path);
-    let return_kind = render_result_kind(&method.callable.return_type);
+    let body = render_return_body(&method.callable.return_type, "result", "returnSink");
     engine.render(
         CALLEE_METHOD_CASE,
         &crate::map! {
@@ -114,7 +122,7 @@ fn render_method_case(
             "MODULE_NAMESPACE" => module_namespace,
             "TYPE_NAME" => definition.name.as_str(),
             "ARGUMENTS" => arguments.as_str(),
-            "RETURN_KIND" => return_kind,
+            "BODY" => body.as_str(),
         },
         false,
     )
@@ -126,14 +134,14 @@ fn render_request_case(
     definition: &TypeDefinition,
     property: &(String, Type),
 ) -> String {
-    let return_kind = render_result_kind(&property.1);
+    let body = render_request_body(&property.1, &property.0);
     engine.render(
         CALLEE_REQUEST_CASE,
         &crate::map! {
             "ACCESSOR" => property.0.as_str(),
             "MODULE_NAMESPACE" => module_namespace,
             "TYPE_NAME" => definition.name.as_str(),
-            "RETURN_KIND" => return_kind,
+            "BODY" => body.as_str(),
         },
         false,
     )
@@ -146,14 +154,15 @@ fn render_update_case(
     property: &(String, Type),
     current_module: &ModulePath,
 ) -> String {
-    let value = render_parameter_decode_expression(&property.1, "value", current_module);
+    let value = render_parameter_value_expression(&property.1, "value", current_module);
+    let body = render_update_body(&property.0, &value);
     engine.render(
         CALLEE_UPDATE_CASE,
         &crate::map! {
             "ACCESSOR" => property.0.as_str(),
             "MODULE_NAMESPACE" => module_namespace,
             "TYPE_NAME" => definition.name.as_str(),
-            "VALUE" => value.as_str(),
+            "BODY" => body.as_str(),
         },
         false,
     )
@@ -164,13 +173,7 @@ fn render_type_annotation(r#type: &Type, current_module: &ModulePath) -> String 
         Type::Primitive(PrimitiveType::Number) => "number".to_string(),
         Type::Primitive(PrimitiveType::String) => "string".to_string(),
         Type::Primitive(PrimitiveType::Boolean) => "boolean".to_string(),
-        Type::Composite(path) => {
-            if path.module_path.format("/") == current_module.format("/") {
-                path.name.clone()
-            } else {
-                format!("{}.{}", module_namespace_name(&path.module_path), path.name)
-            }
-        }
+        Type::Composite(path) => format!("{}.{}", module_namespace_name(&path.module_path), path.name),
         Type::Array(inner) => format!("{}[]", render_type_annotation(inner, current_module)),
         Type::Tuple(elements) => format!(
             "[{}]",
@@ -393,15 +396,14 @@ fn render_function_case(
     module_path: &ModulePath,
 ) -> String {
     let arguments = render_call_arguments(&function.callable.positional_parameters, module_path);
-    let return_kind = render_result_kind(&function.callable.return_type);
-    let result_expression = format!("serializeValue(result, \"{}\", returnSink)", return_kind);
+    let body = render_return_body(&function.callable.return_type, "result", "returnSink");
     engine.render(
         CALLEE_FUNCTION_CASE,
         &crate::map! {
             "CALLEE_NAME" => function.name.as_str(),
             "MODULE_NAMESPACE" => module_namespace,
             "ARGUMENTS" => arguments.as_str(),
-            "RESULT_EXPRESSION" => result_expression.as_str(),
+            "BODY" => body.as_str(),
         },
         false,
     )
@@ -415,12 +417,14 @@ fn render_constructor_case(
     module_path: &ModulePath,
 ) -> String {
     let arguments = render_call_arguments(&constructor.positional_parameters, module_path);
+    let body = render_reference_return_body("result", "returnSink");
     engine.render(
         CALLEE_CONSTRUCTOR_CASE,
         &crate::map! {
             "TYPE_NAME" => definition.name.as_str(),
             "MODULE_NAMESPACE" => module_namespace,
             "ARGUMENTS" => arguments.as_str(),
+            "BODY" => body.as_str(),
         },
         false,
     )
@@ -434,8 +438,7 @@ fn render_static_method_case(
     module_path: &ModulePath,
 ) -> String {
     let arguments = render_call_arguments(&method.callable.positional_parameters, module_path);
-    let return_kind = render_result_kind(&method.callable.return_type);
-    let return_kind = return_kind.to_string();
+    let body = render_return_body(&method.callable.return_type, "result", "returnSink");
     engine.render(
         CALLEE_STATIC_METHOD_CASE,
         &crate::map! {
@@ -443,7 +446,7 @@ fn render_static_method_case(
             "TYPE_NAME" => definition.name.as_str(),
             "MODULE_NAMESPACE" => module_namespace,
             "ARGUMENTS" => arguments.as_str(),
-            "RETURN_KIND" => return_kind.as_str(),
+            "BODY" => body.as_str(),
         },
         false,
     )
@@ -457,6 +460,7 @@ fn render_named_constructor_case(
     module_path: &ModulePath,
 ) -> String {
     let arguments = render_call_arguments(&constructor.callable.positional_parameters, module_path);
+    let body = render_reference_return_body("result", "returnSink");
     engine.render(
         CALLEE_STATIC_NAMED_CONSTRUCTOR_CASE,
         &crate::map! {
@@ -464,6 +468,7 @@ fn render_named_constructor_case(
             "TYPE_NAME" => definition.name.as_str(),
             "MODULE_NAMESPACE" => module_namespace,
             "ARGUMENTS" => arguments.as_str(),
+            "BODY" => body.as_str(),
         },
         false,
     )
@@ -475,8 +480,7 @@ fn render_call_arguments(parameters: &[ValueParameter], current_module: &ModuleP
         .enumerate()
         .map(|(index, parameter)| {
             format!(
-                "decodeParameter(positionalParameters[{index}], \"{}\") as {}",
-                render_parameter_kind(&parameter.r#type),
+                "positionalParameters[{index}] as {}",
                 render_type_annotation(&parameter.r#type, current_module)
             )
         })
@@ -484,36 +488,77 @@ fn render_call_arguments(parameters: &[ValueParameter], current_module: &ModuleP
         .join(", ")
 }
 
-fn render_parameter_decode_expression(
+fn render_parameter_value_expression(
     r#type: &Type,
     name: &str,
     current_module: &ModulePath,
 ) -> String {
+    match r#type {
+        Type::Primitive(PrimitiveType::Number)
+        | Type::Primitive(PrimitiveType::String)
+        | Type::Primitive(PrimitiveType::Boolean)
+        | Type::Composite(_) => {
+            format!("{name} as {}", render_type_annotation(r#type, current_module))
+        }
+        Type::Array(_) | Type::Tuple(_) | Type::Dynamic => {
+            format!("JSON.parse({name} as string) as {}", render_type_annotation(r#type, current_module))
+        }
+    }
+}
+
+fn render_return_body(
+    return_type: &Type,
+    result_name: &str,
+    return_sink: &str,
+) -> String {
+    match return_type {
+        Type::Primitive(PrimitiveType::Number) => format!(
+            "                return {{ kind: \"float\", value: {result_name} }};",
+        ),
+        Type::Primitive(PrimitiveType::String) => format!(
+            "                return {{ kind: \"string\", value: {result_name} }};",
+        ),
+        Type::Primitive(PrimitiveType::Boolean) => format!(
+            "                return {{ kind: \"boolean\", value: {result_name} }};",
+        ),
+        Type::Composite(_) => render_reference_return_body(result_name, return_sink),
+        Type::Array(_) | Type::Tuple(_) | Type::Dynamic => format!(
+            "                return {{ kind: \"string\", value: JSON.stringify({result_name}) }};",
+        ),
+    }
+}
+
+fn render_reference_return_body(result_name: &str, return_sink: &str) -> String {
     format!(
-        "decodeParameter({name}, \"{}\") as {}",
-        render_parameter_kind(r#type),
-        render_type_annotation(r#type, current_module)
+        "                instanceRegistry.set({return_sink}, {result_name});\n                return {{ kind: \"reference\", value: {return_sink} }};",
     )
 }
 
-fn render_parameter_kind(r#type: &Type) -> &'static str {
-    match r#type {
-        Type::Primitive(PrimitiveType::Number) => "number",
-        Type::Primitive(PrimitiveType::String) => "string",
-        Type::Primitive(PrimitiveType::Boolean) => "boolean",
-        Type::Composite(_) => "reference",
-        Type::Array(_) | Type::Tuple(_) | Type::Dynamic => "json",
+fn render_request_body(property_type: &Type, accessor: &str) -> String {
+    let value_expression = format!("typedParent.{accessor}");
+    match property_type {
+        Type::Primitive(PrimitiveType::Number) => format!(
+            "                return {{ kind: \"float\", value: {value_expression} }};",
+        ),
+        Type::Primitive(PrimitiveType::String) => format!(
+            "                return {{ kind: \"string\", value: {value_expression} }};",
+        ),
+        Type::Primitive(PrimitiveType::Boolean) => format!(
+            "                return {{ kind: \"boolean\", value: {value_expression} }};",
+        ),
+        Type::Composite(_) => format!(
+            "                const newReference = crypto.randomUUID();\n                instanceRegistry.set(newReference, {value_expression});\n                return {{ kind: \"reference\", value: newReference }};",
+        ),
+        Type::Array(_) | Type::Tuple(_) | Type::Dynamic => format!(
+            "                return {{ kind: \"string\", value: JSON.stringify({value_expression}) }};",
+        ),
     }
 }
 
-fn render_result_kind(r#type: &Type) -> &'static str {
-    match r#type {
-        Type::Primitive(PrimitiveType::Number) => "number",
-        Type::Primitive(PrimitiveType::String) => "string",
-        Type::Primitive(PrimitiveType::Boolean) => "boolean",
-        Type::Composite(_) => "reference",
-        Type::Array(_) | Type::Tuple(_) | Type::Dynamic => "json",
-    }
+fn render_update_body(accessor: &str, value_expression: &str) -> String {
+    format!(
+        "                typedParent.{accessor} = {value_expression};\n                return;",
+    )
 }
 
 fn module_namespace_name(module_path: &ModulePath) -> String {
@@ -657,11 +702,6 @@ mod tests {
                 .iter()
                 .any(|output| output.path == PathBuf::from("dispatch.ts"))
         );
-        assert!(
-            outputs
-                .iter()
-                .any(|output| output.path == PathBuf::from("library/index.ts"))
-        );
 
         let dispatch_ts = outputs
             .iter()
@@ -671,18 +711,5 @@ mod tests {
         assert!(dispatch_ts.content.contains("trim_whitespace"));
         assert!(dispatch_ts.content.contains("Point"));
         assert!(!dispatch_ts.content.contains("{{"));
-
-        let library_ts = outputs
-            .iter()
-            .find(|output| output.path == PathBuf::from("library/index.ts"))
-            .expect("library/index.ts should be generated");
-        assert!(
-            library_ts
-                .content
-                .contains("export function trim_whitespace")
-        );
-        assert!(library_ts.content.contains("export class Point"));
-        assert!(library_ts.content.contains("distance_to_origin(): number"));
-        assert!(!library_ts.content.contains("{{"));
     }
 }

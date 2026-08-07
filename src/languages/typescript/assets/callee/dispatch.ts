@@ -3,110 +3,38 @@
 import {
   AcknowledgeMessage,
   Bridge,
-  CallMessage,
-  ErrorMessage,
   Message,
-  MethodMessage,
   Parameter,
-  RequestMessage,
   SendMessage,
-  UpdateMessage,
 } from "./bridge.ts";
 
 const instanceRegistry = new Map<string, unknown>();
 
-type SerializedKind = "number" | "string" | "boolean" | "reference" | "json";
-
-function decodeParameter(parameter: Parameter, kind: SerializedKind): unknown {
-  switch (kind) {
-    case "number": {
-      if (parameter.kind === "integer" || parameter.kind === "float") {
-        return parameter.value;
-      }
-      break;
+function resolveParameterValue(param: Parameter): unknown {
+  if (param.kind === "reference") {
+    const instance = instanceRegistry.get(param.value);
+    if (instance === undefined) {
+      throw new Error(`Instance ${param.value} not found`);
     }
-    case "string": {
-      if (parameter.kind === "string") {
-        return parameter.value;
-      }
-      break;
-    }
-    case "boolean": {
-      if (parameter.kind === "boolean") {
-        return parameter.value;
-      }
-      break;
-    }
-    case "reference": {
-      if (parameter.kind === "reference") {
-        const instance = instanceRegistry.get(parameter.value);
-        if (instance === undefined) {
-          throw new Error(`Instance ${parameter.value} not found`);
-        }
-        return instance;
-      }
-      break;
-    }
-    case "json": {
-      if (parameter.kind === "string") {
-        return JSON.parse(parameter.value);
-      }
-      break;
-    }
+    return instance;
   }
-
-  throw new Error("Unexpected message kind");
-}
-
-function serializeValue(
-  value: unknown,
-  kind: SerializedKind,
-  referenceSink: string,
-): Parameter {
-  switch (kind) {
-    case "number": {
-      if (typeof value !== "number") {
-        throw new Error("Unexpected result type");
-      }
-      return {
-        kind: Number.isInteger(value) ? "integer" : "float",
-        value,
-      };
-    }
-    case "string": {
-      if (typeof value !== "string") {
-        throw new Error("Unexpected result type");
-      }
-      return { kind: "string", value };
-    }
-    case "boolean": {
-      if (typeof value !== "boolean") {
-        throw new Error("Unexpected result type");
-      }
-      return { kind: "boolean", value };
-    }
-    case "reference": {
-      if (value === null || typeof value !== "object") {
-        throw new Error("Unexpected result type");
-      }
-      instanceRegistry.set(referenceSink, value);
-      return { kind: "reference", value: referenceSink };
-    }
-    case "json": {
-      return { kind: "string", value: JSON.stringify(value) };
-    }
-  }
+  return param.value;
 }
 
 export function dispatchMessage(message: Message, bridge: Bridge) {
   message.match({
     call(message) {
+      const positionalParameters = message.positionalParameters.map(resolveParameterValue);
+      const namedParameters = new Map<string, unknown>();
+      for (const [key, param] of message.namedParameters.entries()) {
+        namedParameters.set(key, resolveParameterValue(param));
+      }
       const result = dispatchFunction(
         message.modulePath,
         message.callee,
         message.returnSink,
-        message.positionalParameters,
-        message.namedParameters,
+        positionalParameters,
+        namedParameters,
       );
       bridge.send(
         new SendMessage({
@@ -120,11 +48,16 @@ export function dispatchMessage(message: Message, bridge: Bridge) {
       if (instance === undefined) {
         throw new Error(`Instance ${message.calledReference} not found`);
       }
+      const positionalParameters = message.positionalParameters.map(resolveParameterValue);
+      const namedParameters = new Map<string, unknown>();
+      for (const [key, param] of message.namedParameters.entries()) {
+        namedParameters.set(key, resolveParameterValue(param));
+      }
       const result = dispatchMethod(
         instance,
         message.methodName,
-        message.positionalParameters,
-        message.namedParameters,
+        positionalParameters,
+        namedParameters,
         message.returnSink,
       );
       bridge.send(
@@ -139,12 +72,15 @@ export function dispatchMessage(message: Message, bridge: Bridge) {
       if (instance === undefined) {
         throw new Error(`Instance ${message.parent} not found`);
       }
-      handleUpdate(instance, message.accessor, message.value);
+      if (instance === null || typeof instance !== "object") {
+        throw new Error(`Invalid instance for update ${message.accessor}`);
+      }
+      (instance as Record<string, unknown>)[message.accessor] = resolveParameterValue(message.value);
       bridge.send(new AcknowledgeMessage({ reference: message.acknowledgeSink }));
     },
     request(message) {
       const instance = instanceRegistry.get(message.parent);
-      const result = handleRequest(instance, message.accessor, message.valueSink);
+      const result = handleRequest(instance, message.accessor);
       const response = new SendMessage({
         reference: message.valueSink,
         value: result,
@@ -167,8 +103,8 @@ export function dispatchFunction(
   modulePath: string,
   callee: { kind: "function"; name: string } | { kind: "staticMethod"; typeName: string; methodName: string },
   returnSink: string,
-  positionalParameters: Parameter[],
-  namedParameters: Map<string, Parameter> = new Map(),
+  positionalParameters: unknown[],
+  namedParameters: Map<string, unknown> = new Map(),
 ): Parameter {
   switch (callee.kind) {
     case "function": {
@@ -178,10 +114,7 @@ export function dispatchFunction(
       break;
     }
     case "staticMethod": {
-      switch (modulePath) {
-/* {{STATIC_METHOD_CASES}} */
-      }
-      break;
+      throw new Error(`Static method not found: ${modulePath}.${callee.typeName}.${callee.methodName}`);
     }
   }
 
@@ -191,8 +124,8 @@ export function dispatchFunction(
 function dispatchMethod(
   instance: unknown,
   methodName: string,
-  positionalParameters: Parameter[],
-  namedParameters: Map<string, Parameter> = new Map(),
+  positionalParameters: unknown[],
+  namedParameters: Map<string, unknown> = new Map(),
   returnSink: string,
 ): Parameter {
 /* {{METHOD_CASES}} */
@@ -202,23 +135,10 @@ function dispatchMethod(
 function handleRequest(
   parent: unknown,
   accessor: string,
-  valueSink: string,
 ): Parameter {
   if (parent === null || typeof parent !== "object") {
     throw new Error(`Invalid parent for request ${accessor}`);
   }
 /* {{REQUEST_CASES}} */
-  throw new Error(`Property ${accessor} not found`);
-}
-
-function handleUpdate(
-  parent: unknown,
-  accessor: string,
-  value: Parameter,
-): void {
-  if (parent === null || typeof parent !== "object") {
-    throw new Error(`Invalid parent for update ${accessor}`);
-  }
-/* {{UPDATE_CASES}} */
   throw new Error(`Property ${accessor} not found`);
 }
