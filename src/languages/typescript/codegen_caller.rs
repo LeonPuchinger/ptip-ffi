@@ -134,7 +134,11 @@ fn render_type_stub(
             constructor,
         ));
     }
-    members.push(render_reference_factory(engine, &definition.name));
+    members.push(render_reference_factory(
+        engine,
+        &definition.name,
+        &definition.type_parameters,
+    ));
     for property in &definition.properties {
         members.push(render_property_getter(
             engine,
@@ -208,11 +212,19 @@ fn render_constructor_stub(
     )
 }
 
-fn render_reference_factory(engine: &TemplateEngine, type_name: &str) -> String {
+fn render_reference_factory(
+    engine: &TemplateEngine,
+    type_name: &str,
+    type_parameters: &[TypeParameter],
+) -> String {
+    let reference_type_parameters = render_type_parameters(type_parameters);
+    let type_arguments = render_type_arguments(type_parameters);
     engine.render(
         CALLER_REFERENCE_FACTORY,
         &crate::map! {
             "NAME" => type_name,
+            "REFERENCE_TYPE_PARAMETERS" => reference_type_parameters.as_str(),
+            "TYPE_ARGUMENTS" => type_arguments.as_str(),
         },
         false,
     )
@@ -574,6 +586,18 @@ fn render_type_parameter_names(parameters: &[TypeParameter]) -> Vec<String> {
     parameters.iter().map(|parameter| parameter.name.clone()).collect()
 }
 
+fn render_type_arguments(parameters: &[TypeParameter]) -> String {
+    if parameters.is_empty() {
+        return String::new();
+    }
+    let rendered = parameters
+        .iter()
+        .map(|parameter| parameter.name.as_str())
+        .collect::<Vec<_>>()
+        .join(", ");
+    format!("<{rendered}>")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -774,5 +798,45 @@ mod tests {
 
         assert!(index_ts.content.contains("export function takes_point<T>(point: Point<T>): T"));
         assert!(index_ts.content.contains("static __fromReference<T>(uuid: string): Point<T>"));
+    }
+
+    #[test]
+    fn generate_caller_renders_multi_parameter_reference_factory() {
+        let module = Module {
+            path: crate::features::ModulePath::empty(),
+            functions: Vec::new(),
+            types: vec![TypeDefinition {
+                name: "HashMap".to_string(),
+                properties: Vec::new(),
+                default_constructor: None,
+                named_constructors: Vec::new(),
+                methods: Vec::new(),
+                static_methods: Vec::new(),
+                type_parameters: vec![
+                    TypeParameter {
+                        name: "K".to_string(),
+                        default: None,
+                    },
+                    TypeParameter {
+                        name: "V".to_string(),
+                        default: None,
+                    },
+                ],
+                implements: Vec::new(),
+            }],
+        };
+
+        let outputs = generate_caller(vec![&module]);
+        let index_ts = outputs
+            .iter()
+            .find(|output| output.path == std::path::Path::new("index.ts"))
+            .expect("index.ts should be generated");
+
+        assert!(index_ts.content.contains("export class HashMap<K, V>"));
+        assert!(
+            index_ts
+                .content
+                .contains("static __fromReference<K, V>(uuid: string): HashMap<K, V>")
+        );
     }
 }

@@ -557,8 +557,11 @@ fn render_return_body(
             "                return {{ kind: \"boolean\", value: {result_name} }};",
         ),
         Type::Composite(_) => render_reference_return_body(result_name, return_sink),
-        Type::Array(_) | Type::Tuple(_) | Type::Dynamic => format!(
+        Type::Array(_) | Type::Tuple(_) => format!(
             "                return {{ kind: \"string\", value: JSON.stringify({result_name}) }};",
+        ),
+        Type::Dynamic => format!(
+            "                return {{ kind: \"string\", value: \"undefined\" }};",
         ),
     }
 }
@@ -760,5 +763,46 @@ mod tests {
         assert!(dispatch_ts.content.contains("trim_whitespace"));
         assert!(dispatch_ts.content.contains("Point"));
         assert!(!dispatch_ts.content.contains("{{"));
+    }
+
+    #[test]
+    fn generate_callee_renders_void_returns_as_string_payloads() {
+        let module = Module {
+            path: ModulePath::empty(),
+            functions: Vec::new(),
+            types: vec![TypeDefinition {
+                name: "List".to_string(),
+                properties: Vec::new(),
+                default_constructor: None,
+                named_constructors: Vec::new(),
+                methods: vec![Method {
+                    name: "append".to_string(),
+                    r#static: false,
+                    callable: AnonymousCallable {
+                        positional_parameters: vec![ValueParameter {
+                            name: "value".to_string(),
+                            r#type: Type::Primitive(PrimitiveType::Number),
+                            required: true,
+                            variadic: false,
+                            nullable: false,
+                        }],
+                        named_parameters: Vec::new(),
+                        return_type: Type::Dynamic,
+                        type_parameters: Vec::new(),
+                    },
+                }],
+                static_methods: Vec::new(),
+                type_parameters: Vec::new(),
+                implements: Vec::new(),
+            }],
+        };
+
+        let outputs = generate_callee(vec![&module]);
+        let dispatch_ts = outputs
+            .iter()
+            .find(|output| output.path == std::path::Path::new("dispatch.ts"))
+            .expect("dispatch.ts should be generated");
+
+        assert!(dispatch_ts.content.contains("value: \"undefined\""));
     }
 }

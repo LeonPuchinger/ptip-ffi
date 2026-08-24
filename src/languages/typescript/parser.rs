@@ -17,6 +17,9 @@ fn primitive_or_composite(name: String) -> Type {
         "number" => Type::Primitive(PrimitiveType::Number),
         "string" => Type::Primitive(PrimitiveType::String),
         "boolean" => Type::Primitive(PrimitiveType::Boolean),
+        // The current internal type model does not preserve TypeScript void.
+        // Treat it as dynamic to avoid reference-based marshalling.
+        "void" => Type::Dynamic,
         _ => Type::Composite(TypePath {
             module_path: ModulePath::empty(),
             name,
@@ -45,7 +48,9 @@ fn parse_type_arguments<'input>(
     Ok(arguments)
 }
 
-fn parse_type<'input>(lexer: &mut LazyStatefulLexer<'input>) -> Result<Type, ParserError> {
+fn parse_non_union_type<'input>(
+    lexer: &mut LazyStatefulLexer<'input>,
+) -> Result<Type, ParserError> {
     let mut base = if optional(exact("["))(lexer)?.is_some() {
         // Distinguish tuple types like [number, string] from array suffixes handled later.
         let mut elements = Vec::new();
@@ -75,6 +80,18 @@ fn parse_type<'input>(lexer: &mut LazyStatefulLexer<'input>) -> Result<Type, Par
     while optional(exact("["))(lexer)?.is_some() {
         exact("]")(lexer)?;
         base = Type::Array(Box::new(base));
+    }
+
+    Ok(base)
+}
+
+fn parse_type<'input>(lexer: &mut LazyStatefulLexer<'input>) -> Result<Type, ParserError> {
+    let base = parse_non_union_type(lexer)?;
+
+    // We currently model unions lossily and keep the first branch's static shape,
+    // but still consume all `|` branches so surrounding parsing remains correct.
+    while optional(exact("|"))(lexer)?.is_some() {
+        let _ = parse_non_union_type(lexer)?;
     }
 
     Ok(base)
@@ -659,7 +676,7 @@ static STATEMENTS: &[LexerRule] = &[
         modification: StateModification::None,
     },
     LexerRule {
-        pattern: r"\(|\)|\[|\]|\.|,|;|:|\?|<|>|=",
+        pattern: r"\(|\)|\[|\]|\.|,|;|:|\?|<|>|=|\|",
         kind: "punctuation",
         keep: true,
         modification: StateModification::None,
@@ -677,7 +694,7 @@ static STATEMENTS: &[LexerRule] = &[
         modification: StateModification::None,
     },
     LexerRule {
-        pattern: r#"[^\s\w$"'()/\[\]\.,;:<>=]+"#,
+        pattern: r#"[^\s\w$"'()/\[\]\.,;:<>=|]+"#,
         kind: "irrelevant",
         keep: false,
         modification: StateModification::None,
@@ -704,7 +721,7 @@ static FUNCTION_PARAMETERS: &[LexerRule] = &[
         modification: StateModification::None,
     },
     LexerRule {
-        pattern: r"\?|:|\[|\]|<|>|=",
+        pattern: r"\?|:|\[|\]|<|>|=|\|",
         kind: "parameter_syntax",
         keep: true,
         modification: StateModification::None,
@@ -722,7 +739,7 @@ static FUNCTION_PARAMETERS: &[LexerRule] = &[
         modification: StateModification::None,
     },
     LexerRule {
-        pattern: r#"[^\s\w$?:,()\[\]<>.=]+"#,
+        pattern: r#"[^\s\w$?:,()\[\]<>.=|]+"#,
         kind: "irrelevant",
         keep: false,
         modification: StateModification::None,
@@ -823,13 +840,13 @@ static CLASS_BODY: &[LexerRule] = &[
         modification: StateModification::None,
     },
     LexerRule {
-        pattern: r"\(|\)|\[|\]|\.|,|;|:|\?|<|>|=",
+        pattern: r"\(|\)|\[|\]|\.|,|;|:|\?|<|>|=|\|",
         kind: "punctuation",
         keep: true,
         modification: StateModification::None,
     },
     LexerRule {
-        pattern: r#"[^\s\w$\{\}\(\)\[\]\.,;:?<>=]+"#,
+        pattern: r#"[^\s\w$\{\}\(\)\[\]\.,;:?<>=|]+"#,
         kind: "irrelevant",
         keep: false,
         modification: StateModification::None,
@@ -895,13 +912,13 @@ static TYPE_OBJECT_BODY: &[LexerRule] = &[
         modification: StateModification::None,
     },
     LexerRule {
-        pattern: r"\(|\)|\[|\]|\.|,|;|:|\?|<|>|=",
+        pattern: r"\(|\)|\[|\]|\.|,|;|:|\?|<|>|=|\|",
         kind: "punctuation",
         keep: true,
         modification: StateModification::None,
     },
     LexerRule {
-        pattern: r#"[^\s\w$\{\}\(\)\[\]\.,;:?<>=]+"#,
+        pattern: r#"[^\s\w$\{\}\(\)\[\]\.,;:?<>=|]+"#,
         kind: "irrelevant",
         keep: false,
         modification: StateModification::None,
@@ -1187,6 +1204,43 @@ mod tests {
     }
 
     #[test]
+    fn parses_exported_hashmap_like_class_with_private_member_and_union_return_type() {
+        let input = r#"
+            export class HashMap<K, V> {
+                private map: Map<K, V>;
+
+                constructor() {
+                    this.map = new Map<K, V>();
+                }
+
+                set(key: K, value: V): void {
+                    this.map.set(key, value);
+                }
+
+                get(key: K): V | undefined {
+                    return this.map.get(key);
+                }
+
+                has(key: K): boolean {
+                    return this.map.has(key);
+                }
+
+                delete(key: K): boolean {
+                    return this.map.delete(key);
+                }
+            }
+        "#;
+
+        let module = parse_or_panic(input);
+        assert_eq!(module.types.len(), 1);
+
+        let hashmap = find_type(&module, "HashMap");
+        assert_eq!(hashmap.type_parameters.len(), 2);
+        assert!(hashmap.default_constructor.is_some());
+        assert_eq!(hashmap.methods.len(), 4);
+    }
+
+    #[test]
     fn parses_type_references_with_generic_arguments() {
         let input = r#"
             export function takes_point<T>(point: Point<T>): T {
@@ -1259,5 +1313,16 @@ mod tests {
         let default_fn = find_function(&module, "default");
         assert_eq!(default_fn.callable.type_parameters.len(), 1);
         assert_eq!(default_fn.callable.type_parameters[0].name, "T");
+    }
+
+    #[test]
+    fn parses_repository_fixture_with_hashmap_type() {
+        let input = include_str!("../../../in/index.ts");
+        let module = parse_or_panic(input);
+
+        let hashmap = find_type(&module, "HashMap");
+        assert_eq!(hashmap.type_parameters.len(), 2);
+        assert!(hashmap.default_constructor.is_some());
+        assert_eq!(hashmap.methods.len(), 4);
     }
 }

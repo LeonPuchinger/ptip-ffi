@@ -3,6 +3,7 @@ import { Bridge } from "./bridge.ts";
 import { MessageSocket, SynchronousSocket } from "./socket.ts";
 
 let internal_bridge: Bridge;
+let internal_library: SyncChildProcess | undefined;
 
 export function establishBridge(): Bridge {
     if (internal_bridge) return internal_bridge;
@@ -16,10 +17,10 @@ export function establishBridge(): Bridge {
 
     // Run the command and capture stdout/stderr (expects stdout to contain the socket path).
     // TODO: provide lifecycle management to terminate the library process
-    const library = new SyncChildProcess("/bin/sh", ["-c", invoke]);
+    internal_library = new SyncChildProcess("/bin/sh", ["-c", invoke]);
     let stdoutText = "";
     while (true) {
-        const nextEvent = library.next();
+        const nextEvent = internal_library.next();
         if (nextEvent.done) {
             throw new Error(`Library process exited before printing the socket path: ${nextEvent.value?.code}`);
         }
