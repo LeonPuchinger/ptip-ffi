@@ -169,11 +169,12 @@ fn render_update_case(
 }
 
 fn render_type_annotation(r#type: &Type, current_module: &ModulePath) -> String {
+    let _ = current_module.segments.len();
     match r#type {
         Type::Primitive(PrimitiveType::Number) => "number".to_string(),
         Type::Primitive(PrimitiveType::String) => "string".to_string(),
         Type::Primitive(PrimitiveType::Boolean) => "boolean".to_string(),
-        Type::Composite(path) => format!("{}.{}", module_namespace_name(&path.module_path), path.name),
+        Type::Composite(path) => render_type_path_annotation(path),
         Type::Array(inner) => format!("{}[]", render_type_annotation(inner, current_module)),
         Type::Tuple(elements) => format!(
             "[{}]",
@@ -185,6 +186,27 @@ fn render_type_annotation(r#type: &Type, current_module: &ModulePath) -> String 
         ),
         Type::Dynamic => "any".to_string(),
     }
+}
+
+fn render_type_path_annotation(path: &crate::features::TypePath) -> String {
+    if path.module_path.segments.is_empty()
+        && path.type_arguments.is_empty()
+        && path.name.len() == 1
+        && path.name.chars().next().is_some_and(|character| character.is_ascii_uppercase())
+    {
+        return "any".to_string();
+    }
+    let base = format!("{}.{}", module_namespace_name(&path.module_path), path.name);
+    if path.type_arguments.is_empty() {
+        return base;
+    }
+    let type_arguments = path
+        .type_arguments
+        .iter()
+        .map(|argument| render_type_annotation(argument, &path.module_path))
+        .collect::<Vec<_>>()
+        .join(", ");
+    format!("{}<{}>", base, type_arguments)
 }
 
 fn render_function_cases(engine: &TemplateEngine, modules: &[&Module]) -> String {
@@ -512,6 +534,19 @@ fn render_return_body(
     return_sink: &str,
 ) -> String {
     match return_type {
+        Type::Composite(path)
+            if path.module_path.segments.is_empty()
+                && path.name.len() == 1
+                && path
+                    .name
+                    .chars()
+                    .next()
+                    .is_some_and(|character| character.is_ascii_uppercase()) =>
+        {
+            format!(
+                "                if (typeof {result_name} === \"number\") {{\n                    return {{ kind: Number.isInteger({result_name}) ? \"integer\" : \"float\", value: {result_name} }};\n                }}\n                if (typeof {result_name} === \"string\") {{\n                    return {{ kind: \"string\", value: {result_name} }};\n                }}\n                if (typeof {result_name} === \"boolean\") {{\n                    return {{ kind: \"boolean\", value: {result_name} }};\n                }}\n                if (Array.isArray({result_name})) {{\n                    return {{ kind: \"string\", value: JSON.stringify({result_name}) }};\n                }}\n                if ({result_name} !== null && typeof {result_name} === \"object\") {{\n                    const newReference = crypto.randomUUID();\n                    instanceRegistry.set(newReference, {result_name});\n                    return {{ kind: \"reference\", value: newReference }};\n                }}\n                return {{ kind: \"string\", value: JSON.stringify({result_name}) }};",
+            )
+        }
         Type::Primitive(PrimitiveType::Number) => format!(
             "                return {{ kind: \"float\", value: {result_name} }};",
         ),
@@ -537,6 +572,19 @@ fn render_reference_return_body(result_name: &str, return_sink: &str) -> String 
 fn render_request_body(property_type: &Type, accessor: &str) -> String {
     let value_expression = format!("typedParent.{accessor}");
     match property_type {
+        Type::Composite(path)
+            if path.module_path.segments.is_empty()
+                && path.name.len() == 1
+                && path
+                    .name
+                    .chars()
+                    .next()
+                    .is_some_and(|character| character.is_ascii_uppercase()) =>
+        {
+            format!(
+                "                if (typeof {value_expression} === \"number\") {{\n                    return {{ kind: Number.isInteger({value_expression}) ? \"integer\" : \"float\", value: {value_expression} }};\n                }}\n                if (typeof {value_expression} === \"string\") {{\n                    return {{ kind: \"string\", value: {value_expression} }};\n                }}\n                if (typeof {value_expression} === \"boolean\") {{\n                    return {{ kind: \"boolean\", value: {value_expression} }};\n                }}\n                if (Array.isArray({value_expression})) {{\n                    return {{ kind: \"string\", value: JSON.stringify({value_expression}) }};\n                }}\n                if ({value_expression} !== null && typeof {value_expression} === \"object\") {{\n                    const newReference = crypto.randomUUID();\n                    instanceRegistry.set(newReference, {value_expression});\n                    return {{ kind: \"reference\", value: newReference }};\n                }}\n                return {{ kind: \"string\", value: JSON.stringify({value_expression}) }};",
+            )
+        }
         Type::Primitive(PrimitiveType::Number) => format!(
             "                return {{ kind: \"float\", value: {value_expression} }};",
         ),
@@ -598,6 +646,7 @@ fn sanitize_identifier(input: &str) -> String {
     }
 }
 
+#[allow(dead_code)]
 fn module_import_path(from_module: &ModulePath, target_module: &ModulePath) -> String {
     let mut from_segments = vec!["library".to_string()];
     from_segments.extend(from_module.segments.iter().cloned());
@@ -695,17 +744,17 @@ mod tests {
         assert!(
             outputs
                 .iter()
-                .any(|output| output.path == PathBuf::from("main.ts"))
+                .any(|output| output.path == std::path::Path::new("main.ts"))
         );
         assert!(
             outputs
                 .iter()
-                .any(|output| output.path == PathBuf::from("dispatch.ts"))
+                .any(|output| output.path == std::path::Path::new("dispatch.ts"))
         );
 
         let dispatch_ts = outputs
             .iter()
-            .find(|output| output.path == PathBuf::from("dispatch.ts"))
+            .find(|output| output.path == std::path::Path::new("dispatch.ts"))
             .expect("dispatch.ts should be generated");
         assert!(dispatch_ts.content.contains("dispatchMessage"));
         assert!(dispatch_ts.content.contains("trim_whitespace"));

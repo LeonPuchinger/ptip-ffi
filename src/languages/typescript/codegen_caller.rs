@@ -98,7 +98,10 @@ fn render_function_stub(
         &function.callable,
         &function.callable.return_type,
         false,
-        None,
+        CallBodyContext {
+            receiver_type_name: None,
+            type_parameter_names: &[],
+        },
     );
     engine.render(
         CALLER_FUNCTION_STUB,
@@ -118,6 +121,8 @@ fn render_type_stub(
     module_path: &str,
     definition: &TypeDefinition,
 ) -> String {
+    let type_parameters = render_type_parameters(&definition.type_parameters);
+    let type_parameter_names = render_type_parameter_names(&definition.type_parameters);
     let mut members = Vec::new();
     members.push("    readonly uuid: string;".to_string());
     if let Some(constructor) = &definition.default_constructor {
@@ -125,22 +130,39 @@ fn render_type_stub(
             engine,
             module_path,
             &definition.name,
+            &type_parameter_names,
             constructor,
         ));
     }
     members.push(render_reference_factory(engine, &definition.name));
     for property in &definition.properties {
-        members.push(render_property_getter(engine, &definition.name, property));
-        members.push(render_property_setter(engine, &property.0, &property.1));
+        members.push(render_property_getter(
+            engine,
+            &definition.name,
+            &type_parameter_names,
+            property,
+        ));
+        members.push(render_property_setter(
+            engine,
+            &property.0,
+            &property.1,
+            &type_parameter_names,
+        ));
     }
     for method in &definition.methods {
-        members.push(render_method_stub(engine, &definition.name, method));
+        members.push(render_method_stub(
+            engine,
+            &definition.name,
+            &type_parameter_names,
+            method,
+        ));
     }
     for method in &definition.static_methods {
         members.push(render_static_method_stub(
             engine,
             module_path,
             &definition.name,
+            &type_parameter_names,
             method,
         ));
     }
@@ -149,6 +171,7 @@ fn render_type_stub(
             engine,
             module_path,
             &definition.name,
+            &type_parameter_names,
             constructor,
         ));
     }
@@ -157,6 +180,7 @@ fn render_type_stub(
         CALLER_CLASS_STUB,
         &crate::map! {
             "NAME" => definition.name.as_str(),
+            "TYPE_PARAMETERS" => type_parameters.as_str(),
             "MEMBERS" => members.as_str(),
         },
         false,
@@ -167,10 +191,11 @@ fn render_constructor_stub(
     engine: &TemplateEngine,
     module_path: &str,
     type_name: &str,
+    type_parameter_names: &[String],
     constructor: &AnonymousCallable,
 ) -> String {
     let parameters = render_parameters(&constructor.positional_parameters);
-    let positional_values = render_parameters_values(&constructor.positional_parameters);
+    let positional_values = render_parameters_values(&constructor.positional_parameters, type_parameter_names);
     engine.render(
         CALLER_CONSTRUCTOR_STUB,
         &crate::map! {
@@ -196,10 +221,16 @@ fn render_reference_factory(engine: &TemplateEngine, type_name: &str) -> String 
 fn render_property_getter(
     engine: &TemplateEngine,
     type_name: &str,
+    type_parameter_names: &[String],
     property: &(String, Type),
 ) -> String {
     let return_type = render_type_annotation(&property.1);
-    let body = render_response_body(&property.1, type_name, "sendMessage.value");
+    let body = render_response_body(
+        &property.1,
+        type_name,
+        "sendMessage.value",
+        type_parameter_names,
+    );
     engine.render(
         CALLER_PROPERTY_GETTER,
         &crate::map! {
@@ -211,9 +242,14 @@ fn render_property_getter(
     )
 }
 
-fn render_property_setter(engine: &TemplateEngine, name: &str, property_type: &Type) -> String {
+fn render_property_setter(
+    engine: &TemplateEngine,
+    name: &str,
+    property_type: &Type,
+    type_parameter_names: &[String],
+) -> String {
     let value_type = render_type_annotation(property_type);
-    let value = render_parameter_value_expression(property_type, "value");
+    let value = render_parameter_value_expression(property_type, "value", type_parameter_names);
     engine.render(
         CALLER_PROPERTY_SETTER,
         &crate::map! {
@@ -225,18 +261,28 @@ fn render_property_setter(engine: &TemplateEngine, name: &str, property_type: &T
     )
 }
 
-fn render_method_stub(engine: &TemplateEngine, type_name: &str, method: &Method) -> String {
+fn render_method_stub(
+    engine: &TemplateEngine,
+    type_name: &str,
+    type_parameter_names: &[String],
+    method: &Method,
+) -> String {
     let type_parameters = render_type_parameters(&method.callable.type_parameters);
     let parameters = render_parameters(&method.callable.positional_parameters);
     let return_type = render_type_annotation(&method.callable.return_type);
+    let mut callable_type_parameter_names = type_parameter_names.to_vec();
+    callable_type_parameter_names.extend(render_type_parameter_names(&method.callable.type_parameters));
     let body = render_call_body(
         engine,
         "",
         &method.name,
         &method.callable,
         &method.callable.return_type,
-        false,
-        Some(type_name),
+        true,
+        CallBodyContext {
+            receiver_type_name: Some(type_name),
+            type_parameter_names: &callable_type_parameter_names,
+        },
     );
     engine.render(
         CALLER_METHOD_STUB,
@@ -255,11 +301,14 @@ fn render_static_method_stub(
     engine: &TemplateEngine,
     module_path: &str,
     type_name: &str,
+    type_parameter_names: &[String],
     method: &Method,
 ) -> String {
     let type_parameters = render_type_parameters(&method.callable.type_parameters);
     let parameters = render_parameters(&method.callable.positional_parameters);
     let return_type = render_type_annotation(&method.callable.return_type);
+    let mut callable_type_parameter_names = type_parameter_names.to_vec();
+    callable_type_parameter_names.extend(render_type_parameter_names(&method.callable.type_parameters));
     let body = render_call_body(
         engine,
         module_path,
@@ -267,7 +316,10 @@ fn render_static_method_stub(
         &method.callable,
         &method.callable.return_type,
         false,
-        Some(type_name),
+        CallBodyContext {
+            receiver_type_name: Some(type_name),
+            type_parameter_names: &callable_type_parameter_names,
+        },
     );
     engine.render(
         CALLER_STATIC_METHOD_STUB,
@@ -286,6 +338,7 @@ fn render_static_named_constructor_stub(
     engine: &TemplateEngine,
     module_path: &str,
     type_name: &str,
+    type_parameter_names: &[String],
     constructor: &FunctionDefinition,
 ) -> String {
     let return_type = render_type_annotation(&Type::Composite(crate::features::TypePath::new(
@@ -294,6 +347,8 @@ fn render_static_named_constructor_stub(
     )));
     let type_parameters = render_type_parameters(&constructor.callable.type_parameters);
     let parameters = render_parameters(&constructor.callable.positional_parameters);
+    let mut callable_type_parameter_names = type_parameter_names.to_vec();
+    callable_type_parameter_names.extend(render_type_parameter_names(&constructor.callable.type_parameters));
     let body = render_call_body(
         engine,
         module_path,
@@ -304,7 +359,10 @@ fn render_static_named_constructor_stub(
             type_name.to_string(),
         )),
         false,
-        Some(type_name),
+        CallBodyContext {
+            receiver_type_name: Some(type_name),
+            type_parameter_names: &callable_type_parameter_names,
+        },
     );
     engine.render(
         CALLER_STATIC_NAMED_CONSTRUCTOR_STUB,
@@ -326,13 +384,17 @@ fn render_call_body(
     callable: &AnonymousCallable,
     return_type: &Type,
     is_method: bool,
-    receiver_type_name: Option<&str>,
+    context: CallBodyContext<'_>,
 ) -> String {
-    let positional_values = render_parameters_values(&callable.positional_parameters);
+    let positional_values = render_parameters_values(
+        &callable.positional_parameters,
+        context.type_parameter_names,
+    );
     let response_body = render_response_body(
         return_type,
-        receiver_type_name.unwrap_or(callee_name),
+        context.receiver_type_name.unwrap_or(callee_name),
         "sendMessage.value",
+        context.type_parameter_names,
     );
     if is_method {
         return engine.render(
@@ -357,12 +419,23 @@ fn render_call_body(
     )
 }
 
+struct CallBodyContext<'a> {
+    receiver_type_name: Option<&'a str>,
+    type_parameter_names: &'a [String],
+}
+
 fn render_response_body(
     return_type: &Type,
     composite_type_name: &str,
     send_message_value: &str,
+    type_parameter_names: &[String],
 ) -> String {
     match return_type {
+        Type::Composite(path) if type_parameter_names.contains(&path.name) => format!(
+            "            if ({send_message_value}.kind === \"integer\" || {send_message_value}.kind === \"float\" || {send_message_value}.kind === \"string\" || {send_message_value}.kind === \"boolean\") {{\n                return {send_message_value}.value as {annotation};\n            }}\n            if ({send_message_value}.kind === \"reference\") {{\n                return {send_message_value}.value as {annotation};\n            }}\n            if ({send_message_value}.kind === \"array\" || {send_message_value}.kind === \"tuple\") {{\n                return {send_message_value}.value as {annotation};\n            }}\n            throw new Error(\"Unexpected message kind\");\n",
+            annotation = render_type_annotation(return_type),
+            send_message_value = send_message_value,
+        ),
         Type::Primitive(PrimitiveType::Number) => format!(
             "            if ({send_message_value}.kind === \"integer\" || {send_message_value}.kind === \"float\") {{\n                return {send_message_value}.value;\n            }}\n            throw new Error(\"Unexpected message kind\");\n",
         ),
@@ -373,8 +446,9 @@ fn render_response_body(
             "            if ({send_message_value}.kind === \"boolean\") {{\n                return {send_message_value}.value;\n            }}\n            throw new Error(\"Unexpected message kind\");\n",
         ),
         Type::Composite(_) => format!(
-            "            if ({send_message_value}.kind !== \"reference\") {{\n                throw new Error(\"Unexpected message kind\");\n            }}\n            return {composite_type_name}.__fromReference({send_message_value}.value);\n",
+            "            if ({send_message_value}.kind !== \"reference\") {{\n                throw new Error(\"Unexpected message kind\");\n            }}\n            return {composite_type_name}.__fromReference({send_message_value}.value) as {annotation};\n",
             composite_type_name = composite_type_name,
+            annotation = render_type_annotation(return_type),
             send_message_value = send_message_value,
         ),
         Type::Array(_) | Type::Tuple(_) | Type::Dynamic => {
@@ -388,7 +462,7 @@ fn render_type_annotation(r#type: &Type) -> String {
         Type::Primitive(PrimitiveType::Number) => "number".to_string(),
         Type::Primitive(PrimitiveType::String) => "string".to_string(),
         Type::Primitive(PrimitiveType::Boolean) => "boolean".to_string(),
-        Type::Composite(path) => path.name.clone(),
+        Type::Composite(path) => render_type_path_annotation(path),
         Type::Array(inner) => format!("{}[]", render_type_annotation(inner)),
         Type::Tuple(elements) => format!(
             "[{}]",
@@ -402,7 +476,24 @@ fn render_type_annotation(r#type: &Type) -> String {
     }
 }
 
-fn render_parameter_value_expression(r#type: &Type, name: &str) -> String {
+fn render_type_path_annotation(path: &crate::features::TypePath) -> String {
+    if path.type_arguments.is_empty() {
+        return path.name.clone();
+    }
+    let type_arguments = path
+        .type_arguments
+        .iter()
+        .map(render_type_annotation)
+        .collect::<Vec<_>>()
+        .join(", ");
+    format!("{}<{}>", path.name, type_arguments)
+}
+
+fn render_parameter_value_expression(
+    r#type: &Type,
+    name: &str,
+    type_parameter_names: &[String],
+) -> String {
     match r#type {
         Type::Primitive(PrimitiveType::Number) => format!(
             "{{\n                    kind: Number.isInteger({name}) ? \"integer\" : \"float\",\n                    value: {name},\n                }}"
@@ -412,6 +503,9 @@ fn render_parameter_value_expression(r#type: &Type, name: &str) -> String {
         ),
         Type::Primitive(PrimitiveType::Boolean) => format!(
             "{{\n                    kind: \"boolean\",\n                    value: {name},\n                }}"
+        ),
+        Type::Composite(path) if type_parameter_names.contains(&path.name) => format!(
+            "(() => {{\n                    if (typeof {name} === \"number\") {{\n                        return {{ kind: Number.isInteger({name}) ? \"integer\" : \"float\", value: {name} }};\n                    }}\n                    if (typeof {name} === \"string\") {{\n                        return {{ kind: \"string\", value: {name} }};\n                    }}\n                    if (typeof {name} === \"boolean\") {{\n                        return {{ kind: \"boolean\", value: {name} }};\n                    }}\n                    if (Array.isArray({name})) {{\n                        return {{ kind: \"string\", value: JSON.stringify({name}) }};\n                    }}\n                    if ({name} !== null && typeof {name} === \"object\" && \"uuid\" in {name}) {{\n                        return {{ kind: \"reference\", value: ({name} as {{ uuid: string }}).uuid }};\n                    }}\n                    return {{ kind: \"string\", value: JSON.stringify({name}) }};\n                }})()"
         ),
         Type::Composite(_) => format!(
             "{{\n                    kind: \"reference\",\n                    value: {name}.uuid,\n                }}"
@@ -451,10 +545,12 @@ fn render_parameter_signature(parameter: &ValueParameter) -> String {
     )
 }
 
-fn render_parameters_values(parameters: &[ValueParameter]) -> String {
+fn render_parameters_values(parameters: &[ValueParameter], type_parameter_names: &[String]) -> String {
     parameters
         .iter()
-        .map(|parameter| render_parameter_value_expression(&parameter.r#type, &parameter.name))
+        .map(|parameter| {
+            render_parameter_value_expression(&parameter.r#type, &parameter.name, type_parameter_names)
+        })
         .collect::<Vec<_>>()
         .join(", ")
 }
@@ -472,6 +568,10 @@ fn render_type_parameters(parameters: &[TypeParameter]) -> String {
         .collect::<Vec<_>>()
         .join(", ");
     format!("<{rendered}>")
+}
+
+fn render_type_parameter_names(parameters: &[TypeParameter]) -> Vec<String> {
+    parameters.iter().map(|parameter| parameter.name.clone()).collect()
 }
 
 #[cfg(test)]
@@ -542,7 +642,7 @@ mod tests {
         let outputs = generate_caller(vec![&module]);
         let index_ts = outputs
             .iter()
-            .find(|output| output.path == PathBuf::from("index.ts"))
+            .find(|output| output.path == std::path::Path::new("index.ts"))
             .expect("index.ts should be generated");
 
         assert!(
@@ -553,5 +653,126 @@ mod tests {
         assert!(index_ts.content.contains("export class Point"));
         assert!(index_ts.content.contains("distance_to_origin(): number"));
         assert!(!index_ts.content.contains("{{STUBS}}"));
+    }
+
+    #[test]
+    fn generate_caller_renders_generic_type_parameters_on_classes() {
+        let module = Module {
+            path: crate::features::ModulePath::empty(),
+            functions: Vec::new(),
+            types: vec![TypeDefinition {
+                name: "List".to_string(),
+                properties: vec![("head".to_string(), Type::Composite(crate::features::TypePath::new(
+                    crate::features::ModulePath::empty(),
+                    "T".to_string(),
+                )))],
+                default_constructor: None,
+                named_constructors: Vec::new(),
+                methods: vec![Method {
+                    name: "insert".to_string(),
+                    r#static: false,
+                    callable: AnonymousCallable {
+                        positional_parameters: vec![ValueParameter {
+                            name: "value".to_string(),
+                            r#type: Type::Composite(crate::features::TypePath::new(
+                                crate::features::ModulePath::empty(),
+                                "T".to_string(),
+                            )),
+                            required: true,
+                            variadic: false,
+                            nullable: false,
+                        }],
+                        named_parameters: Vec::new(),
+                        return_type: Type::Composite(crate::features::TypePath::new(
+                            crate::features::ModulePath::empty(),
+                            "T".to_string(),
+                        )),
+                        type_parameters: Vec::new(),
+                    },
+                }],
+                static_methods: Vec::new(),
+                type_parameters: vec![TypeParameter {
+                    name: "T".to_string(),
+                    default: None,
+                }],
+                implements: Vec::new(),
+            }],
+        };
+
+        let outputs = generate_caller(vec![&module]);
+        let index_ts = outputs
+            .iter()
+            .find(|output| output.path == std::path::Path::new("index.ts"))
+            .expect("index.ts should be generated");
+
+        assert!(index_ts.content.contains("export class List<T>"));
+        assert!(index_ts.content.contains("get head(): T"));
+        assert!(index_ts.content.contains("insert(value: T): T"));
+    }
+
+    #[test]
+    fn generate_caller_renders_generic_type_arguments_on_references() {
+        let module = Module {
+            path: crate::features::ModulePath::empty(),
+            functions: vec![FunctionDefinition {
+                name: "takes_point".to_string(),
+                callable: AnonymousCallable {
+                    positional_parameters: vec![ValueParameter {
+                        name: "point".to_string(),
+                        r#type: Type::Composite(crate::features::TypePath {
+                            module_path: crate::features::ModulePath::empty(),
+                            name: "Point".to_string(),
+                            type_arguments: vec![Type::Composite(crate::features::TypePath {
+                                module_path: crate::features::ModulePath::empty(),
+                                name: "T".to_string(),
+                                type_arguments: Vec::new(),
+                            })],
+                        }),
+                        required: true,
+                        variadic: false,
+                        nullable: false,
+                    }],
+                    named_parameters: Vec::new(),
+                    return_type: Type::Composite(crate::features::TypePath {
+                        module_path: crate::features::ModulePath::empty(),
+                        name: "T".to_string(),
+                        type_arguments: Vec::new(),
+                    }),
+                    type_parameters: vec![TypeParameter {
+                        name: "T".to_string(),
+                        default: None,
+                    }],
+                },
+            }],
+            types: vec![TypeDefinition {
+                name: "Point".to_string(),
+                properties: vec![(
+                    "value".to_string(),
+                    Type::Composite(crate::features::TypePath {
+                        module_path: crate::features::ModulePath::empty(),
+                        name: "T".to_string(),
+                        type_arguments: Vec::new(),
+                    }),
+                )],
+                default_constructor: None,
+                named_constructors: Vec::new(),
+                methods: Vec::new(),
+                static_methods: Vec::new(),
+                type_parameters: vec![TypeParameter {
+                    name: "T".to_string(),
+                    default: None,
+                }],
+                implements: Vec::new(),
+            }],
+        };
+
+        let outputs = generate_caller(vec![&module]);
+        let index_ts = outputs
+            .iter()
+            .find(|output| output.path == std::path::Path::new("index.ts"))
+            .expect("index.ts should be generated");
+
+        assert!(index_ts.content.contains("export function takes_point<T>(point: Point<T>): T"));
+        assert!(index_ts.content.contains("static __fromReference<T>(uuid: string): Point<T>"));
     }
 }

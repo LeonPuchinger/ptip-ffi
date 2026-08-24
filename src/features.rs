@@ -36,11 +36,16 @@ pub struct Module {
 pub struct TypePath {
     pub module_path: ModulePath,
     pub name: String,
+    pub type_arguments: Vec<Type>,
 }
 
 impl TypePath {
     pub fn new(module_path: ModulePath, name: String) -> Self {
-        Self { module_path, name }
+        Self {
+            module_path,
+            name,
+            type_arguments: Vec::new(),
+        }
     }
 
     pub fn format(&self, module_separator: &str, type_separator: &str) -> String {

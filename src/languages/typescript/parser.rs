@@ -20,8 +20,29 @@ fn primitive_or_composite(name: String) -> Type {
         _ => Type::Composite(TypePath {
             module_path: ModulePath::empty(),
             name,
+            type_arguments: Vec::new(),
         }),
     }
+}
+
+fn parse_type_arguments<'input>(
+    lexer: &mut LazyStatefulLexer<'input>,
+) -> Result<Vec<Type>, ParserError> {
+    let mut arguments = Vec::new();
+    if optional(exact("<"))(lexer)?.is_none() {
+        return Ok(arguments);
+    }
+
+    loop {
+        arguments.push(parse_type(lexer)?);
+        if optional(exact(","))(lexer)?.is_some() {
+            continue;
+        }
+        exact(">")(lexer)?;
+        break;
+    }
+
+    Ok(arguments)
 }
 
 fn parse_type<'input>(lexer: &mut LazyStatefulLexer<'input>) -> Result<Type, ParserError> {
@@ -41,22 +62,12 @@ fn parse_type<'input>(lexer: &mut LazyStatefulLexer<'input>) -> Result<Type, Par
         Type::Tuple(elements)
     } else if let Some(name) = optional(token_kind("identifier"))(lexer)? {
         let base = primitive_or_composite(name);
-
-        // Parse and ignore generic type arguments. The current feature model stores
-        // only the outer type path.
-        if optional(exact("<"))(lexer)?.is_some() {
-            let mut depth = 1usize;
-            while depth > 0 {
-                match lexer.next() {
-                    Ok(token) if token.text == "<" => depth += 1,
-                    Ok(token) if token.text == ">" => depth -= 1,
-                    Ok(_) => {}
-                    Err(LexerError::Eof) => return Err(ParserError::UnexpectedEof),
-                    Err(e) => return Err(e.into()),
-                }
-            }
+        if let Type::Composite(mut path) = base {
+            path.type_arguments = parse_type_arguments(lexer)?;
+            Type::Composite(path)
+        } else {
+            base
         }
-        base
     } else {
         Type::Dynamic
     };
@@ -200,24 +211,12 @@ fn consume_function_body_or_terminator<'input>(
 
 fn parse_type_path<'input>(lexer: &mut LazyStatefulLexer<'input>) -> Result<TypePath, ParserError> {
     let name = token_kind("identifier")(lexer)?;
-
-    // Parse and ignore generic arguments for implements/type references.
-    if optional(exact("<"))(lexer)?.is_some() {
-        let mut depth = 1usize;
-        while depth > 0 {
-            match lexer.next() {
-                Ok(token) if token.text == "<" => depth += 1,
-                Ok(token) if token.text == ">" => depth -= 1,
-                Ok(_) => {}
-                Err(LexerError::Eof) => return Err(ParserError::UnexpectedEof),
-                Err(e) => return Err(e.into()),
-            }
-        }
-    }
+    let type_arguments = parse_type_arguments(lexer)?;
 
     Ok(TypePath {
         module_path: ModulePath::empty(),
         name,
+        type_arguments,
     })
 }
 
@@ -1185,6 +1184,30 @@ mod tests {
         assert_eq!(wrapper.methods.len(), 1);
         assert_eq!(wrapper.methods[0].name, "some_method");
         assert_is_primitive_string(&wrapper.methods[0].callable.return_type);
+    }
+
+    #[test]
+    fn parses_type_references_with_generic_arguments() {
+        let input = r#"
+            export function takes_point<T>(point: Point<T>): T {
+                return point.value as T;
+            }
+        "#;
+
+        let module = parse_or_panic(input);
+        let takes_point = find_function(&module, "takes_point");
+
+        assert_eq!(takes_point.callable.type_parameters.len(), 1);
+        assert_eq!(takes_point.callable.type_parameters[0].name, "T");
+
+        match &takes_point.callable.positional_parameters[0].r#type {
+            Type::Composite(path) => {
+                assert_eq!(path.name, "Point");
+                assert_eq!(path.type_arguments.len(), 1);
+                assert_is_composite(&path.type_arguments[0], "T");
+            }
+            other => panic!("expected composite type, got {:?}", std::any::type_name_of_val(other)),
+        }
     }
 
     #[test]
