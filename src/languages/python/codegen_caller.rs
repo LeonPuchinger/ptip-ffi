@@ -108,11 +108,8 @@ fn render_call_arguments(parameters: &[ValueParameter]) -> String {
     parameters
         .iter()
         .map(|parameter| {
-            if parameter.variadic {
-                format!("*{}", parameter.name)
-            } else {
-                parameter.name.clone()
-            }
+            let _ = parameter.variadic;
+            format!("python_to_parameter({})", parameter.name)
         })
         .collect::<Vec<_>>()
         .join(", ")

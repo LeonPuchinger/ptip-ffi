@@ -1,6 +1,6 @@
 class {{NAME}}:
     def __init__(self, *args: Any, **kwargs: Any) -> None:
-        message = CallMessage(module_path="", callee=FunctionTarget(name="{{NAME}}"), return_sink=str(uuid4()), positional=[{{POSITIONAL_ARGUMENTS}}], named={{{KWARG_ARGUMENTS}}})
+        message = CallMessage(module_path="", callee=FunctionTarget(name="{{NAME}}"), return_sink=uuid4().hex, positional_parameters=[{{POSITIONAL_ARGUMENTS}}], named_parameters={})
         response = exchange(message)
         if isinstance(response, SendMessage):
             self.uuid = str(parameter_to_python(response.value))
