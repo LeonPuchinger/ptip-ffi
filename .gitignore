@@ -10,3 +10,6 @@
 *.pyc
 *.swp
 .DS_Store
+
+out/
+in/
