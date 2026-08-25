@@ -138,6 +138,23 @@ class DropMessage:
 Message = CallMessage | MethodMessage | RequestMessage | UpdateMessage | SendMessage | AcknowledgeMessage | ErrorMessage | DropMessage
 
 
+class Bridge:
+    def __init__(self, socket: MessageSocket):
+        self.socket = socket
+
+    def send(self, message: Message) -> None:
+        self.socket.send_text(message.serialize())
+
+    def next_message(self) -> Message | None:
+        text = self.socket.receive_text()
+        if text is None:
+            return None
+        return parse_message(text)
+
+    def close(self) -> None:
+        self.socket.close()
+
+
 def serialize_invocation_path(module_path: str, callee: CallTarget) -> str:
     if isinstance(callee, FunctionTarget):
         if module_path:
@@ -290,12 +307,12 @@ def parse_invocation_path(text: str) -> tuple[str, CallTarget]:
 
 
 def exchange(message: Message, socket_path: str | None = None) -> Any:
-    connection = MessageSocket(SynchronousSocket.from_path(socket_path or os.environ.get("PTIP_FFI_SOCKET_PATH", "/tmp/ptip-ffi-python.sock")))
+    bridge = Bridge(MessageSocket(SynchronousSocket.from_path(socket_path or os.environ.get("PTIP_FFI_SOCKET_PATH", "/tmp/ptip-ffi-python.sock"))))
     try:
-        connection.send_text(message.serialize())
-        response_text = connection.receive_text()
-        if response_text is None:
+        bridge.send(message)
+        response = bridge.next_message()
+        if response is None:
             raise RuntimeError("Callee closed the connection without responding")
-        return parse_message(response_text)
+        return response
     finally:
-        connection.close()
+        bridge.close()

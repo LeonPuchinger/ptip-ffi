@@ -25,7 +25,12 @@ def _store_instance(value: Any) -> str:
     _INSTANCE_REGISTRY[reference] = value
     return reference
 
-def _result_to_parameter(result: Any) -> Parameter:
+
+def _store_instance_with_reference(reference: str, value: Any) -> str:
+    _INSTANCE_REGISTRY[reference] = value
+    return reference
+
+def _result_to_parameter(result: Any, reference: str | None = None) -> Parameter:
     if result is None:
         return Parameter(kind="string", value="undefined")
     if isinstance(result, Parameter):
@@ -39,8 +44,16 @@ def _result_to_parameter(result: Any) -> Parameter:
     if isinstance(result, str):
         return Parameter(kind="string", value=result)
     if hasattr(result, "uuid"):
-        return Parameter(kind="reference", value=str(getattr(result, "uuid")))
+        instance_reference = str(getattr(result, "uuid"))
+        _INSTANCE_REGISTRY[instance_reference] = result
+        return Parameter(kind="reference", value=instance_reference)
+    if reference is not None:
+        return Parameter(kind="reference", value=_store_instance_with_reference(reference, result))
     return Parameter(kind="reference", value=_store_instance(result))
+
+
+def _is_constructor_call(callee: Any, target: Any) -> bool:
+    return hasattr(callee, "name") and isinstance(target, type)
 
 def _resolve_target(callee: Any) -> Any:
     if hasattr(callee, "name"):
@@ -49,11 +62,16 @@ def _resolve_target(callee: Any) -> Any:
         return getattr(getattr(_LIBRARY, callee.type_name), callee.method_name)
     raise TypeError(f"Unsupported call target: {type(callee)!r}")
 
-def _invoke_target(target: Any, positional_parameters: list[Parameter], named_parameters: dict[str, Parameter]) -> Parameter:
+def _invoke_target(
+    target: Any,
+    positional_parameters: list[Parameter],
+    named_parameters: dict[str, Parameter],
+    reference: str | None = None,
+) -> Parameter:
     positional = [parameter_to_python(parameter) for parameter in positional_parameters]
     named = {name: parameter_to_python(parameter) for name, parameter in named_parameters.items()}
     result = target(*positional, **named)
-    return _result_to_parameter(result)
+    return _result_to_parameter(result, reference)
 
 def dispatch_message(message: Any) -> Any:
 {{HANDLERS}}

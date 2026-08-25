@@ -9,6 +9,7 @@ use crate::{
 const CALLER_INIT: &str = include_str!("./assets/caller/__init__.py");
 const FFI_BRIDGE: &str = include_str!("./assets/bridge.py");
 const FFI_SOCKET: &str = include_str!("./assets/socket.py");
+const FFI_MAIN: &str = include_str!("./assets/caller/main.py");
 const CALLER_INDEX_TEMPLATE: &str = include_str!("./assets/caller/index.py");
 const CALLER_FUNCTION_TEMPLATE: &str = include_str!("./assets/caller/function_stub.py");
 const CALLER_CLASS_TEMPLATE: &str = include_str!("./assets/caller/class_stub.py");
@@ -37,6 +38,10 @@ pub fn generate_caller(modules: Vec<&Module>) -> Vec<CodegenOutput> {
         CodegenOutput {
             path: PathBuf::from("ffi/socket.py"),
             content: FFI_SOCKET.to_string(),
+        },
+        CodegenOutput {
+            path: PathBuf::from("ffi/main.py"),
+            content: FFI_MAIN.to_string(),
         },
         CodegenOutput {
             path: PathBuf::from("index.py"),
