@@ -6,10 +6,9 @@ use crate::{
     map,
 };
 
-const FFI_INIT: &str = include_str!("./assets/ffi/__init__.py");
-const FFI_BRIDGE: &str = include_str!("./assets/ffi/bridge.py");
-const FFI_SOCKET: &str = include_str!("./assets/ffi/socket.py");
-const FFI_MAIN: &str = include_str!("./assets/ffi/main.py");
+const CALLER_INIT: &str = include_str!("./assets/caller/__init__.py");
+const FFI_BRIDGE: &str = include_str!("./assets/bridge.py");
+const FFI_SOCKET: &str = include_str!("./assets/socket.py");
 const CALLER_INDEX_TEMPLATE: &str = include_str!("./assets/caller/index.py");
 const CALLER_FUNCTION_TEMPLATE: &str = include_str!("./assets/caller/function_stub.py");
 const CALLER_CLASS_TEMPLATE: &str = include_str!("./assets/caller/class_stub.py");
@@ -28,8 +27,8 @@ pub fn generate_caller(modules: Vec<&Module>) -> Vec<CodegenOutput> {
 
     vec![
         CodegenOutput {
-            path: PathBuf::from("ffi/__init__.py"),
-            content: FFI_INIT.to_string(),
+            path: PathBuf::from("__init__.py"),
+            content: CALLER_INIT.to_string(),
         },
         CodegenOutput {
             path: PathBuf::from("ffi/bridge.py"),
@@ -38,10 +37,6 @@ pub fn generate_caller(modules: Vec<&Module>) -> Vec<CodegenOutput> {
         CodegenOutput {
             path: PathBuf::from("ffi/socket.py"),
             content: FFI_SOCKET.to_string(),
-        },
-        CodegenOutput {
-            path: PathBuf::from("ffi/main.py"),
-            content: FFI_MAIN.to_string(),
         },
         CodegenOutput {
             path: PathBuf::from("index.py"),

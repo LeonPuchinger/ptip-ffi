@@ -17,8 +17,6 @@ from ffi.bridge import (
     parameter_to_python,
     python_to_parameter,
 )
-from ffi.main import DEFAULT_SOCKET_PATH
-
 _LIBRARY = importlib.import_module("library.index")
 _INSTANCE_REGISTRY: dict[str, Any] = {}
 

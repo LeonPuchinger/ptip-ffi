@@ -6,10 +6,9 @@ use crate::{
     map,
 };
 
-const FFI_INIT: &str = include_str!("./assets/ffi/__init__.py");
-const FFI_BRIDGE: &str = include_str!("./assets/ffi/bridge.py");
-const FFI_SOCKET: &str = include_str!("./assets/ffi/socket.py");
-const FFI_MAIN: &str = include_str!("./assets/ffi/main.py");
+const CALLEE_INIT: &str = include_str!("./assets/callee/__init__.py");
+const FFI_BRIDGE: &str = include_str!("./assets/bridge.py");
+const FFI_SOCKET: &str = include_str!("./assets/socket.py");
 const CALLEE_DISPATCH_TEMPLATE: &str = include_str!("./assets/callee/dispatch.py");
 const CALLEE_MAIN_TEMPLATE: &str = include_str!("./assets/callee/main.py");
 const CALL_HANDLER_TEMPLATE: &str = include_str!("./assets/callee/call_handler.py");
@@ -25,8 +24,8 @@ pub fn generate_callee(_modules: Vec<&Module>) -> Vec<CodegenOutput> {
 
     vec![
         CodegenOutput {
-            path: PathBuf::from("ffi/__init__.py"),
-            content: FFI_INIT.to_string(),
+            path: PathBuf::from("__init__.py"),
+            content: CALLEE_INIT.to_string(),
         },
         CodegenOutput {
             path: PathBuf::from("ffi/bridge.py"),
@@ -35,10 +34,6 @@ pub fn generate_callee(_modules: Vec<&Module>) -> Vec<CodegenOutput> {
         CodegenOutput {
             path: PathBuf::from("ffi/socket.py"),
             content: FFI_SOCKET.to_string(),
-        },
-        CodegenOutput {
-            path: PathBuf::from("ffi/main.py"),
-            content: FFI_MAIN.to_string(),
         },
         CodegenOutput {
             path: PathBuf::from("dispatch.py"),
