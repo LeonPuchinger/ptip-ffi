@@ -2,17 +2,18 @@ use std::path::Path;
 
 use crate::{
     codegen::{copy_directory, persist_all},
-    config::LanguageConfig,
     error::PTIPFFIError,
 };
 
 mod codegen;
-mod config;
+pub mod config;
 mod error;
 mod features;
 mod languages;
 mod parser;
 mod util;
+
+pub use config::LanguageConfig;
 
 pub fn initialize() -> Vec<LanguageConfig> {
     languages::register_languages()
