@@ -1,5 +1,5 @@
 use crate::{
-    features::{AnonymousCallable, FunctionDefinition, Module, ModulePath, Type, TypeDefinition, ValueParameter},
+    features::{AnonymousCallable, FunctionDefinition, Method, Module, ModulePath, Type, TypeDefinition, ValueParameter},
     map,
     parser::{
         atoms::{exact, token_kind},
@@ -204,6 +204,76 @@ fn parse_class_definition<'input>(lexer: &mut LazyStatefulLexer<'input>) -> Resu
     })
 }
 
+fn parse_method_header(header: &str) -> Result<FunctionDefinition, ParserError> {
+    let mut lexer = LazyStatefulLexer::new(
+        header,
+        map! {
+            "statements" => STATEMENTS.to_vec(),
+        },
+        "statements",
+    )?;
+    parse_function_definition(&mut lexer)
+}
+
+fn parse_class_methods(input: &str, module: &mut Module) -> Result<(), ParserError> {
+    let lines = input.lines().collect::<Vec<_>>();
+    let mut class_index = 0;
+
+    while class_index < lines.len() {
+        let class_line = lines[class_index];
+        let class_trimmed = class_line.trim_start();
+        if class_line.len() != class_trimmed.len() || !class_trimmed.starts_with("class ") {
+            class_index += 1;
+            continue;
+        }
+
+        let class_indent = class_line.len() - class_trimmed.len();
+        let class_name = class_trimmed[6..]
+            .split(['[', '(', ':'])
+            .next()
+            .unwrap_or_default()
+            .trim();
+        let Some(definition) = module.types.iter_mut().find(|definition| definition.name == class_name) else {
+            class_index += 1;
+            continue;
+        };
+
+        let mut line_index = class_index + 1;
+        while line_index < lines.len() {
+            let line = lines[line_index];
+            let trimmed = line.trim_start();
+            let indentation = line.len() - trimmed.len();
+            if !trimmed.is_empty() && indentation <= class_indent {
+                break;
+            }
+            if trimmed.starts_with("def ") {
+                let mut function = parse_method_header(trimmed)?;
+                if function
+                    .callable
+                    .positional_parameters
+                    .first()
+                    .is_some_and(|parameter| parameter.name == "self")
+                {
+                    function.callable.positional_parameters.remove(0);
+                }
+                if function.name == "__init__" {
+                    definition.default_constructor = Some(function.callable);
+                } else {
+                    definition.methods.push(Method {
+                        name: function.name,
+                        r#static: false,
+                        callable: function.callable,
+                    });
+                }
+            }
+            line_index += 1;
+        }
+        class_index = line_index;
+    }
+
+    Ok(())
+}
+
 enum ParsedFeature {
     Function(FunctionDefinition),
     Type(TypeDefinition),
@@ -278,7 +348,7 @@ pub fn parse(input: &str) -> Result<Module, ParserError> {
         "statements",
     )?;
 
-    parse_at_anchors(
+    let mut module = parse_at_anchors(
         Module {
             path: ModulePath::empty(),
             functions: Vec::new(),
@@ -300,7 +370,9 @@ pub fn parse(input: &str) -> Result<Module, ParserError> {
                 _input: std::marker::PhantomData,
             },
         },
-    )(&mut lexer)
+    )(&mut lexer)?;
+    parse_class_methods(input, &mut module)?;
+    Ok(module)
 }
 
 #[cfg(test)]
@@ -329,5 +401,25 @@ class Box[T](Generic[T]):
         assert!(matches!(module.functions[0].callable.positional_parameters[1].r#type, Type::Dynamic));
         assert!(matches!(module.functions[0].callable.return_type, Type::Dynamic));
         assert_eq!(module.types[0].name, "Box");
+    }
+
+    #[test]
+    fn parses_class_methods_and_constructor() {
+        let module = parse_or_panic(
+            r#"
+class Point:
+    def __init__(self, x: int, y: int) -> None:
+        pass
+
+    def distance_to_origin(self) -> float:
+        pass
+"#,
+        );
+
+        let point = &module.types[0];
+        assert!(point.default_constructor.is_some());
+        assert_eq!(point.methods.len(), 1);
+        assert_eq!(point.methods[0].name, "distance_to_origin");
+        assert!(point.methods[0].callable.positional_parameters.is_empty());
     }
 }

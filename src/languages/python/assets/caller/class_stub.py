@@ -23,3 +23,5 @@ class {{NAME}}:
         instance = cls.__new__(cls)
         instance.uuid = uuid
         return instance
+
+{{METHODS}}

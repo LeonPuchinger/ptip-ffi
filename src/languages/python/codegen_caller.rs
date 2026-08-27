@@ -13,6 +13,7 @@ const FFI_MAIN: &str = include_str!("./assets/caller/main.py");
 const CALLER_INDEX_TEMPLATE: &str = include_str!("./assets/caller/index.py");
 const CALLER_FUNCTION_TEMPLATE: &str = include_str!("./assets/caller/function_stub.py");
 const CALLER_CLASS_TEMPLATE: &str = include_str!("./assets/caller/class_stub.py");
+const CALLER_METHOD_TEMPLATE: &str = include_str!("./assets/caller/method_stub.py");
 
 pub fn generate_caller(modules: Vec<&Module>) -> Vec<CodegenOutput> {
     let engine = TemplateEngine::new("{{NAME}}").expect("failed to compile template placeholder");
@@ -82,12 +83,38 @@ fn render_function_stub(engine: &TemplateEngine, function: &FunctionDefinition) 
 fn render_class_stub(engine: &TemplateEngine, definition: &TypeDefinition) -> String {
     let positional_arguments = "python_to_parameter(value) for value in args".to_string();
     let named_arguments = "key: python_to_parameter(value) for key, value in kwargs.items()".to_string();
+    let methods = definition
+        .methods
+        .iter()
+        .map(|method| render_method_stub(engine, method))
+        .collect::<Vec<_>>()
+        .join("\n\n");
     engine.render(
         CALLER_CLASS_TEMPLATE,
         &map! {
             "NAME" => definition.name.as_str(),
             "POSITIONAL_ARGUMENTS" => positional_arguments.as_str(),
             "KWARG_ARGUMENTS" => named_arguments.as_str(),
+            "METHODS" => methods.as_str(),
+        },
+        false,
+    )
+}
+
+fn render_method_stub(engine: &TemplateEngine, method: &crate::features::Method) -> String {
+    let signature = render_parameters(&method.callable.positional_parameters);
+    let signature = if signature.is_empty() {
+        String::new()
+    } else {
+        format!(", {signature}")
+    };
+    let positional_arguments = render_call_arguments(&method.callable.positional_parameters);
+    engine.render(
+        CALLER_METHOD_TEMPLATE,
+        &map! {
+            "NAME" => method.name.as_str(),
+            "SIGNATURE" => signature.as_str(),
+            "POSITIONAL_ARGUMENTS" => positional_arguments.as_str(),
         },
         false,
     )
