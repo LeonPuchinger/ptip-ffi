@@ -1,11 +1,10 @@
 from __future__ import annotations
 
 import base64
-import os
 from dataclasses import dataclass, field
 from typing import Any
 
-from .socket import MessageSocket, SynchronousSocket
+from .socket import MessageSocket
 
 
 def encode_base64_no_pad_utf8(text: str) -> str:
@@ -304,15 +303,3 @@ def parse_invocation_path(text: str) -> tuple[str, CallTarget]:
         type_name, method_name = text.split("#", 1)
         return "", StaticMethodTarget(type_name=type_name, method_name=method_name)
     return "", FunctionTarget(name=text)
-
-
-def exchange(message: Message, socket_path: str | None = None) -> Any:
-    bridge = Bridge(MessageSocket(SynchronousSocket.from_path(socket_path or os.environ.get("PTIP_FFI_SOCKET_PATH", "/tmp/ptip-ffi-python.sock"))))
-    try:
-        bridge.send(message)
-        response = bridge.next_message()
-        if response is None:
-            raise RuntimeError("Callee closed the connection without responding")
-        return response
-    finally:
-        bridge.close()
