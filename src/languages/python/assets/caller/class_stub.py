@@ -13,6 +13,7 @@ class {{NAME}}:
             if response.value.kind != "reference":
                 raise RuntimeError("Unexpected message kind or value")
             self.uuid = str(parameter_to_python(response.value))
+            weakref.finalize(self, _finalize_reference, self.uuid)
         elif isinstance(response, ErrorMessage):
             raise RuntimeError(parameter_to_python(response.error))
         else:
@@ -22,6 +23,7 @@ class {{NAME}}:
     def __from_reference(cls, uuid: str) -> "{{NAME}}":
         instance = cls.__new__(cls)
         instance.uuid = uuid
+        weakref.finalize(instance, _finalize_reference, uuid)
         return instance
 
 {{METHODS}}
