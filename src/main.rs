@@ -4,7 +4,7 @@ use clap::{Args, Parser, Subcommand};
 use ptip_ffi::{generate, initialize};
 
 static DEFAULT_LIBRARY_ENTRY_POINTS: LazyLock<HashMap<&'static str, &'static str>> =
-    LazyLock::new(|| HashMap::from([("typescript", "index.ts"), ("python", "index.py")]));
+    LazyLock::new(|| HashMap::from([("typescript", "index.ts"), ("python", "index.py"), ("cpp", "index.hpp")]));
 
 #[derive(Parser)]
 #[command(name = "ptip-ffi")]
