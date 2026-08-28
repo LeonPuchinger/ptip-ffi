@@ -138,19 +138,26 @@ fn split_top_level_semicolons(input: &str) -> Vec<String> {
 }
 
 fn parse_type_parameters(raw: &str) -> Vec<TypeParameter> {
-    let Some(open) = raw.find('<') else {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
         return Vec::new();
+    }
+
+    let params = if let (Some(open), Some(close)) = (trimmed.find('<'), trimmed.rfind('>')) {
+        &trimmed[open + 1..close]
+    } else {
+        trimmed
     };
-    let Some(close) = raw.rfind('>') else {
-        return Vec::new();
-    };
-    let params = &raw[open + 1..close];
+
     split_top_level_commas(params)
         .into_iter()
         .filter_map(|part| {
             let value = part
                 .replace("typename ", "")
                 .replace("class ", "")
+                .split('=')
+                .next()
+                .unwrap_or(part)
                 .trim()
                 .to_string();
             if value.is_empty() {
@@ -407,6 +414,56 @@ fn parse_struct_or_class<'input>(
     Ok(definition)
 }
 
+fn parse_function_signature_from_lexer<'input>(
+    lexer: &mut LazyStatefulLexer<'input>,
+) -> Result<String, ParserError> {
+    let mut tokens = Vec::new();
+    loop {
+        match lexer.peek() {
+            Ok(token) => {
+                if token.text == ";" || token.text == "{" || token.text == "}" {
+                    break;
+                }
+                let next = lexer.next()?;
+                tokens.push(next.text.to_string());
+                if next.text == "(" {
+                    let mut depth = 1usize;
+                    while depth > 0 {
+                        match lexer.peek() {
+                            Ok(token) => {
+                                let next_token = lexer.next()?;
+                                tokens.push(next_token.text.to_string());
+                                match next_token.text {
+                                    "(" => depth += 1,
+                                    ")" => {
+                                        depth -= 1;
+                                        if depth == 0 {
+                                            break;
+                                        }
+                                    }
+                                    _ => {}
+                                }
+                            }
+                            Err(LexerError::Eof) => break,
+                            Err(err) => return Err(err.into()),
+                        }
+                    }
+                    break;
+                }
+            }
+            Err(LexerError::Eof) => break,
+            Err(err) => return Err(err.into()),
+        }
+    }
+
+    let text = tokens.join(" ");
+    if text.contains('(') && text.contains(')') {
+        Ok(text)
+    } else {
+        Err(ParserError::Custom("not a function-like declaration".to_string()))
+    }
+}
+
 fn parse_template_definition<'input>(
     lexer: &mut LazyStatefulLexer<'input>,
 ) -> Result<ParsedFeature, ParserError> {
@@ -422,19 +479,27 @@ fn parse_template_definition<'input>(
         }
     }
     let type_parameters = parse_type_parameters(&template_tokens.join(" "));
-    if optional(exact("struct"))(lexer)?.is_some() {
+
+    let next_kind = match lexer.peek() {
+        Ok(token) => token.text.to_string(),
+        Err(_) => String::new(),
+    };
+
+    if next_kind == "struct" {
         let definition = parse_struct_or_class(lexer, "struct")?;
         let mut definition = definition;
         definition.type_parameters = type_parameters;
         return Ok(ParsedFeature::Type(definition));
     }
-    if optional(exact("class"))(lexer)?.is_some() {
+    if next_kind == "class" {
         let definition = parse_struct_or_class(lexer, "class")?;
         let mut definition = definition;
         definition.type_parameters = type_parameters;
         return Ok(ParsedFeature::Type(definition));
     }
-    let function = parse_function_from_text(&template_tokens.join(" "))?;
+
+    let function_text = parse_function_signature_from_lexer(lexer)?;
+    let function = parse_function_from_text(&function_text)?;
     let mut function = function;
     function.callable.type_parameters = type_parameters;
     Ok(ParsedFeature::Function(function))
@@ -610,5 +675,21 @@ mod tests {
         assert_eq!(module.types.len(), 1);
         assert_eq!(module.types[0].name, "Widget");
         assert_eq!(module.types[0].methods.len(), 1);
+    }
+
+    #[test]
+    fn parses_generic_function_template() {
+        let module = parse("template <typename T> T identity(T value) { return value; }").unwrap();
+        assert_eq!(module.functions.len(), 1);
+        assert_eq!(module.functions[0].name, "identity");
+        assert_eq!(module.functions[0].callable.type_parameters.len(), 1);
+    }
+
+    #[test]
+    fn parses_generic_struct_template() {
+        let module = parse("template <typename T> struct Box { T value; };\n").unwrap();
+        assert_eq!(module.types.len(), 1);
+        assert_eq!(module.types[0].name, "Box");
+        assert_eq!(module.types[0].type_parameters.len(), 1);
     }
 }
