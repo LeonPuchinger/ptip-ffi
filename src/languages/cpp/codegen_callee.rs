@@ -8,10 +8,11 @@ use crate::{
 const CALLEE_BRIDGE: &str = include_str!("./assets/bridge.hpp");
 const CALLEE_SOCKET: &str = include_str!("./assets/socket.hpp");
 const CALLEE_MAIN: &str = include_str!("./assets/callee_main.hpp");
-const CALLEE_DISPATCH: &str = include_str!("./assets/caller_stub.hpp");
+const CALLEE_DISPATCH: &str = include_str!("./assets/callee_dispatch.hpp");
 
-pub fn generate_callee(_modules: Vec<&Module>) -> Vec<CodegenOutput> {
+pub fn generate_callee(modules: Vec<&Module>) -> Vec<CodegenOutput> {
     let engine = TemplateEngine::new("{{NAME}}").expect("failed to compile template placeholder");
+    let declarations = render_declarations(&modules);
     vec![
         CodegenOutput {
             path: PathBuf::from("bridge.hpp"),
@@ -30,11 +31,67 @@ pub fn generate_callee(_modules: Vec<&Module>) -> Vec<CodegenOutput> {
             content: engine.render(
                 CALLEE_DISPATCH,
                 &crate::map! {
-                    "NAME" => "ptip_ffi_dispatch",
-                    "STUBS" => "",
+                    "DECLARATIONS" => declarations.as_str(),
                 },
                 false,
             ),
         },
     ]
+}
+
+fn render_declarations(modules: &[&Module]) -> String {
+    modules
+        .iter()
+        .flat_map(|module| {
+            module
+                .functions
+                .iter()
+                .map(|function| format!("void dispatch_{}();", function.name))
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::Path;
+
+    use super::generate_callee;
+    use crate::features::{
+        AnonymousCallable, FunctionDefinition, Module, ModulePath, PrimitiveType, Type,
+        ValueParameter,
+    };
+
+    #[test]
+    fn generate_callee_emits_runtime_files() {
+        let module = Module {
+            path: ModulePath::empty(),
+            functions: vec![FunctionDefinition {
+                name: "identity".to_string(),
+                callable: AnonymousCallable {
+                    positional_parameters: vec![ValueParameter {
+                        name: "value".to_string(),
+                        r#type: Type::Primitive(PrimitiveType::Number),
+                        required: true,
+                        variadic: false,
+                        nullable: false,
+                    }],
+                    named_parameters: Vec::new(),
+                    return_type: Type::Primitive(PrimitiveType::Number),
+                    type_parameters: Vec::new(),
+                },
+            }],
+            types: Vec::new(),
+        };
+
+        let outputs = generate_callee(vec![&module]);
+        let dispatch = outputs
+            .iter()
+            .find(|output| output.path == Path::new("dispatch.hpp"))
+            .expect("dispatch.hpp should be generated");
+
+        assert!(!dispatch.content.is_empty());
+        assert!(dispatch.content.contains("namespace ptip_ffi_generated"));
+        assert!(dispatch.content.contains("dispatch_identity"));
+    }
 }

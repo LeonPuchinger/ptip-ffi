@@ -44,54 +44,68 @@ pub fn generate_caller(modules: Vec<&Module>) -> Vec<CodegenOutput> {
 fn render_caller_stubs(engine: &TemplateEngine, modules: &[&Module]) -> String {
     let mut out = Vec::new();
     for module in modules {
-        for function in &module.functions {
-            out.push(render_function_stub(engine, function));
-        }
-        for definition in &module.types {
-            out.push(render_type_stub(engine, definition));
+        let body = render_module_stubs(engine, module);
+        if module.path.segments.is_empty() {
+            out.push(body);
+        } else {
+            out.push(format!("namespace {} {{\n{}\n}}", module.path.format("::"), indent(&body, 2)));
         }
     }
     out.join("\n\n")
 }
 
+fn render_module_stubs(engine: &TemplateEngine, module: &Module) -> String {
+    let mut out = Vec::new();
+    for function in &module.functions {
+        out.push(render_function_stub(engine, function));
+    }
+    for definition in &module.types {
+        out.push(render_type_stub(engine, definition));
+    }
+    out.join("\n\n")
+}
+
 fn render_function_stub(_engine: &TemplateEngine, function: &FunctionDefinition) -> String {
+    let type_parameters = render_type_parameters(&function.callable.type_parameters);
     let return_type = render_type_name(&function.callable.return_type);
     let parameters = render_parameters(&function.callable.positional_parameters);
-
-    if parameters.is_empty() {
-        format!("inline {} {}() {{ return ::{}(); }}", return_type, function.name, function.name)
-    } else {
-        format!(
-            "inline {} {}({}) {{ return ::{}({}); }}",
-            return_type,
-            function.name,
-            parameters,
-            function.name,
-            function
-                .callable
-                .positional_parameters
-                .iter()
-                .map(|parameter| parameter.name.clone())
-                .collect::<Vec<_>>()
-                .join(", ")
-        )
-    }
+    format!("{}{} {}({});", type_parameters, return_type, function.name, parameters)
 }
 
 fn render_type_stub(engine: &TemplateEngine, definition: &TypeDefinition) -> String {
+    let type_parameters = render_type_parameters(&definition.type_parameters);
     let mut members = Vec::new();
+    if let Some(constructor) = &definition.default_constructor {
+        members.push(format!(
+            "{}({});",
+            definition.name,
+            render_parameters(&constructor.positional_parameters)
+        ));
+    }
+    for constructor in &definition.named_constructors {
+        members.push(format!(
+            "static {} {}({});",
+            render_type_name(&constructor.callable.return_type),
+            constructor.name,
+            render_parameters(&constructor.callable.positional_parameters)
+        ));
+    }
     for property in &definition.properties {
         members.push(format!("{} {};", render_type_name(&property.1), property.0));
     }
     for method in &definition.methods {
         members.push(render_method_stub(engine, method));
     }
+    for method in &definition.static_methods {
+        members.push(render_method_stub(engine, method));
+    }
 
     if members.is_empty() {
-        format!("struct {} {{\n  // empty type\n}};", definition.name)
+        format!("{}struct {} {{}};", type_parameters, definition.name)
     } else {
         format!(
-            "struct {} {{\n  {}\n}};",
+            "{}struct {} {{\n  {}\n}};",
+            type_parameters,
             definition.name,
             members.join("\n  ")
         )
@@ -100,10 +114,12 @@ fn render_type_stub(engine: &TemplateEngine, definition: &TypeDefinition) -> Str
 
 fn render_method_stub(_engine: &TemplateEngine, method: &Method) -> String {
     format!(
-        "{} {}({}) const;",
+        "{}{} {}({}){};",
+        if method.r#static { "static " } else { "" },
         render_type_name(&method.callable.return_type),
         method.name,
-        render_parameters(&method.callable.positional_parameters)
+        render_parameters(&method.callable.positional_parameters),
+        if method.r#static { "" } else { " const" }
     )
 }
 
@@ -138,13 +154,35 @@ fn render_type_name(r#type: &Type) -> String {
             }
         }
         Type::Array(inner) => format!("std::vector<{}>", render_type_name(inner)),
-        Type::Tuple(_) => "std::tuple<>".to_string(),
-        Type::Dynamic => "auto".to_string(),
+        Type::Tuple(elements) => format!(
+            "std::tuple<{}>",
+            elements.iter().map(render_type_name).collect::<Vec<_>>().join(", ")
+        ),
+        Type::Dynamic => "std::any".to_string(),
     }
 }
 
-fn render_type_parameters(_parameters: &[TypeParameter]) -> String {
-    String::new()
+fn render_type_parameters(parameters: &[TypeParameter]) -> String {
+    if parameters.is_empty() {
+        return String::new();
+    }
+    format!(
+        "template <{}>\n",
+        parameters
+            .iter()
+            .map(|parameter| format!("typename {}", parameter.name))
+            .collect::<Vec<_>>()
+            .join(", ")
+    )
+}
+
+fn indent(value: &str, spaces: usize) -> String {
+    let prefix = " ".repeat(spaces);
+    value
+        .lines()
+        .map(|line| format!("{}{}", prefix, line))
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 #[cfg(test)]
@@ -215,7 +253,7 @@ mod tests {
             .find(|output| output.path == Path::new("index.hpp"))
             .expect("index.hpp should be generated");
 
-        assert!(index.content.contains("inline double add(double x, double y)"));
+        assert!(index.content.contains("double add(double x, double y);"));
         assert!(index.content.contains("struct Point"));
         assert!(index.content.contains("double distance() const"));
     }
