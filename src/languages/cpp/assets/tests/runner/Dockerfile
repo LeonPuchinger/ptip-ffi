@@ -1,4 +1,4 @@
-FROM gcc:15.2.1
+FROM gcc:15
 
 WORKDIR /opt/ptip-ffi-tests
 
