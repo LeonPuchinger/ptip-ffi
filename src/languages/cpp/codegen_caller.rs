@@ -55,13 +55,27 @@ fn render_caller_stubs(engine: &TemplateEngine, modules: &[&Module]) -> String {
 }
 
 fn render_function_stub(_engine: &TemplateEngine, function: &FunctionDefinition) -> String {
-    format!(
-        "inline {} {}({}) {{ return {}; }}",
-        render_type_name(&function.callable.return_type),
-        function.name,
-        render_parameters(&function.callable.positional_parameters),
-        function.name
-    )
+    let return_type = render_type_name(&function.callable.return_type);
+    let parameters = render_parameters(&function.callable.positional_parameters);
+
+    if parameters.is_empty() {
+        format!("inline {} {}() {{ return ::{}(); }}", return_type, function.name, function.name)
+    } else {
+        format!(
+            "inline {} {}({}) {{ return ::{}({}); }}",
+            return_type,
+            function.name,
+            parameters,
+            function.name,
+            function
+                .callable
+                .positional_parameters
+                .iter()
+                .map(|parameter| parameter.name.clone())
+                .collect::<Vec<_>>()
+                .join(", ")
+        )
+    }
 }
 
 fn render_type_stub(engine: &TemplateEngine, definition: &TypeDefinition) -> String {
@@ -72,17 +86,16 @@ fn render_type_stub(engine: &TemplateEngine, definition: &TypeDefinition) -> Str
     for method in &definition.methods {
         members.push(render_method_stub(engine, method));
     }
-    let class_or_struct = if definition.properties.is_empty() && definition.methods.is_empty() {
-        "struct"
+
+    if members.is_empty() {
+        format!("struct {} {{\n  // empty type\n}};", definition.name)
     } else {
-        "struct"
-    };
-    format!(
-        "{} {} {{\n  {}\n}};",
-        class_or_struct,
-        definition.name,
-        members.join("\n  ")
-    )
+        format!(
+            "struct {} {{\n  {}\n}};",
+            definition.name,
+            members.join("\n  ")
+        )
+    }
 }
 
 fn render_method_stub(_engine: &TemplateEngine, method: &Method) -> String {
@@ -132,4 +145,78 @@ fn render_type_name(r#type: &Type) -> String {
 
 fn render_type_parameters(_parameters: &[TypeParameter]) -> String {
     String::new()
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::Path;
+
+    use super::generate_caller;
+    use crate::features::{
+        AnonymousCallable, FunctionDefinition, Method, Module, ModulePath, PrimitiveType, Type,
+        TypeDefinition, ValueParameter,
+    };
+
+    #[test]
+    fn generate_caller_renders_function_and_type_stubs() {
+        let module = Module {
+            path: ModulePath::empty(),
+            functions: vec![FunctionDefinition {
+                name: "add".to_string(),
+                callable: AnonymousCallable {
+                    positional_parameters: vec![
+                        ValueParameter {
+                            name: "x".to_string(),
+                            r#type: Type::Primitive(PrimitiveType::Number),
+                            required: true,
+                            variadic: false,
+                            nullable: false,
+                        },
+                        ValueParameter {
+                            name: "y".to_string(),
+                            r#type: Type::Primitive(PrimitiveType::Number),
+                            required: true,
+                            variadic: false,
+                            nullable: false,
+                        },
+                    ],
+                    named_parameters: Vec::new(),
+                    return_type: Type::Primitive(PrimitiveType::Number),
+                    type_parameters: Vec::new(),
+                },
+            }],
+            types: vec![TypeDefinition {
+                name: "Point".to_string(),
+                properties: vec![
+                    ("x".to_string(), Type::Primitive(PrimitiveType::Number)),
+                    ("y".to_string(), Type::Primitive(PrimitiveType::Number)),
+                ],
+                default_constructor: None,
+                named_constructors: Vec::new(),
+                methods: vec![Method {
+                    name: "distance".to_string(),
+                    r#static: false,
+                    callable: AnonymousCallable {
+                        positional_parameters: Vec::new(),
+                        named_parameters: Vec::new(),
+                        return_type: Type::Primitive(PrimitiveType::Number),
+                        type_parameters: Vec::new(),
+                    },
+                }],
+                static_methods: Vec::new(),
+                type_parameters: Vec::new(),
+                implements: Vec::new(),
+            }],
+        };
+
+        let outputs = generate_caller(vec![&module]);
+        let index = outputs
+            .iter()
+            .find(|output| output.path == Path::new("index.hpp"))
+            .expect("index.hpp should be generated");
+
+        assert!(index.content.contains("inline double add(double x, double y)"));
+        assert!(index.content.contains("struct Point"));
+        assert!(index.content.contains("double distance() const"));
+    }
 }
