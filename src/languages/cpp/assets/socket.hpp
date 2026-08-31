@@ -1,9 +1,14 @@
 #pragma once
 
+#include <array>
 #include <cstddef>
 #include <cstdint>
+#include <cstring>
 #include <stdexcept>
 #include <string>
+#include <sys/socket.h>
+#include <sys/un.h>
+#include <unistd.h>
 #include <vector>
 
 namespace ptip_ffi {
@@ -14,6 +19,58 @@ public:
     virtual std::size_t read(char* buffer, std::size_t length) = 0;
     virtual std::size_t write(const char* buffer, std::size_t length) = 0;
     virtual void close() = 0;
+};
+
+class UnixDomainStream : public SynchronousStream {
+public:
+    explicit UnixDomainStream(const std::string& socket_path) : socket_path_(socket_path) {
+        socket_fd_ = socket(AF_UNIX, SOCK_STREAM, 0);
+        if (socket_fd_ < 0) {
+            throw std::runtime_error("failed to create unix socket");
+        }
+
+        sockaddr_un address{};
+        std::memset(&address, 0, sizeof(address));
+        address.sun_family = AF_UNIX;
+        std::strncpy(address.sun_path, socket_path_.c_str(), sizeof(address.sun_path) - 1);
+
+        if (connect(socket_fd_, reinterpret_cast<sockaddr*>(&address), sizeof(address)) < 0) {
+            ::close(socket_fd_);
+            socket_fd_ = -1;
+            throw std::runtime_error("failed to connect to library socket");
+        }
+    }
+
+    ~UnixDomainStream() override {
+        close();
+    }
+
+    std::size_t read(char* buffer, std::size_t length) override {
+        const ssize_t bytes_read = ::recv(socket_fd_, buffer, length, 0);
+        if (bytes_read <= 0) {
+            return 0;
+        }
+        return static_cast<std::size_t>(bytes_read);
+    }
+
+    std::size_t write(const char* buffer, std::size_t length) override {
+        const ssize_t bytes_written = ::send(socket_fd_, buffer, length, 0);
+        if (bytes_written < 0) {
+            return 0;
+        }
+        return static_cast<std::size_t>(bytes_written);
+    }
+
+    void close() override {
+        if (socket_fd_ >= 0) {
+            ::close(socket_fd_);
+            socket_fd_ = -1;
+        }
+    }
+
+private:
+    std::string socket_path_;
+    int socket_fd_ = -1;
 };
 
 class MessageSocket {

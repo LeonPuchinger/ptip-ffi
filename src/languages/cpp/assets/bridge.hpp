@@ -14,6 +14,15 @@ namespace ptip_ffi {
 
 using UUID = std::string;
 
+inline std::uint64_t next_uuid_counter() {
+    static std::uint64_t counter = 0;
+    return ++counter;
+}
+
+inline std::string generate_uuid() {
+    return "uuid-" + std::to_string(next_uuid_counter());
+}
+
 enum class ParameterKind { Integer, Float, Boolean, String, Reference };
 
 struct Parameter {
@@ -77,6 +86,45 @@ public:
 
 private:
     class MessageSocket& socket_;
+};
+
+class ManagedReference {
+public:
+    ManagedReference(std::string uuid, Bridge* bridge) : uuid_(std::move(uuid)), bridge_(bridge) {}
+    ~ManagedReference() {
+        if (bridge_ != nullptr && !uuid_.empty()) {
+            bridge_->send_message("D\n" + uuid_);
+        }
+    }
+
+    ManagedReference(const ManagedReference&) = delete;
+    ManagedReference& operator=(const ManagedReference&) = delete;
+
+    ManagedReference(ManagedReference&& other) noexcept : uuid_(std::move(other.uuid_)), bridge_(other.bridge_) {
+        other.bridge_ = nullptr;
+        other.uuid_.clear();
+    }
+
+    ManagedReference& operator=(ManagedReference&& other) noexcept {
+        if (this != &other) {
+            if (bridge_ != nullptr && !uuid_.empty()) {
+                bridge_->send_message("D\n" + uuid_);
+            }
+            uuid_ = std::move(other.uuid_);
+            bridge_ = other.bridge_;
+            other.bridge_ = nullptr;
+            other.uuid_.clear();
+        }
+        return *this;
+    }
+
+    const std::string& uuid() const {
+        return uuid_;
+    }
+
+private:
+    std::string uuid_;
+    Bridge* bridge_ = nullptr;
 };
 
 inline void assert_no_crlf(const std::string& value) {
