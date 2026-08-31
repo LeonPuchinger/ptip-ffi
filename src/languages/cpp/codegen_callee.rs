@@ -8,6 +8,7 @@ use crate::{
 const CALLEE_BRIDGE: &str = include_str!("./assets/bridge.hpp");
 const CALLEE_SOCKET: &str = include_str!("./assets/socket.hpp");
 const CALLEE_MAIN: &str = include_str!("./assets/callee_main.hpp");
+const CALLEE_MAIN_ENTRYPOINT: &str = "#include \"main.hpp\"\n\nint main() {\n    return ptip_ffi::run_library_server();\n}\n";
 const CALLEE_DISPATCH: &str = include_str!("./assets/callee_dispatch.hpp");
 
 pub fn generate_callee(modules: Vec<&Module>) -> Vec<CodegenOutput> {
@@ -25,6 +26,10 @@ pub fn generate_callee(modules: Vec<&Module>) -> Vec<CodegenOutput> {
         CodegenOutput {
             path: PathBuf::from("main.hpp"),
             content: CALLEE_MAIN.to_owned(),
+        },
+        CodegenOutput {
+            path: PathBuf::from("main.cpp"),
+            content: CALLEE_MAIN_ENTRYPOINT.to_owned(),
         },
         CodegenOutput {
             path: PathBuf::from("dispatch.hpp"),
@@ -94,9 +99,15 @@ mod tests {
             .iter()
             .find(|output| output.path == Path::new("dispatch.hpp"))
             .expect("dispatch.hpp should be generated");
+        let main_entrypoint = outputs
+            .iter()
+            .find(|output| output.path == Path::new("main.cpp"))
+            .expect("main.cpp should be generated");
 
         assert!(!dispatch.content.is_empty());
         assert!(dispatch.content.contains("namespace ptip_ffi_generated"));
         assert!(dispatch.content.contains("dispatch_identity"));
+        assert!(main_entrypoint.content.contains("int main()"));
+        assert!(main_entrypoint.content.contains("run_library_server"));
     }
 }

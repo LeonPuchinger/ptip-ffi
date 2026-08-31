@@ -23,6 +23,8 @@ public:
 
 class UnixDomainStream : public SynchronousStream {
 public:
+    explicit UnixDomainStream(int fd) : socket_fd_(fd) {}
+
     explicit UnixDomainStream(const std::string& socket_path) : socket_path_(socket_path) {
         socket_fd_ = socket(AF_UNIX, SOCK_STREAM, 0);
         if (socket_fd_ < 0) {
@@ -66,6 +68,53 @@ public:
             ::close(socket_fd_);
             socket_fd_ = -1;
         }
+    }
+
+private:
+    std::string socket_path_;
+    int socket_fd_ = -1;
+};
+
+class UnixDomainListener {
+public:
+    explicit UnixDomainListener(const std::string& socket_path) : socket_path_(socket_path) {
+        socket_fd_ = socket(AF_UNIX, SOCK_STREAM, 0);
+        if (socket_fd_ < 0) {
+            throw std::runtime_error("failed to create unix listener");
+        }
+
+        sockaddr_un address{};
+        std::memset(&address, 0, sizeof(address));
+        address.sun_family = AF_UNIX;
+        std::strncpy(address.sun_path, socket_path_.c_str(), sizeof(address.sun_path) - 1);
+
+        unlink(socket_path_.c_str());
+        if (bind(socket_fd_, reinterpret_cast<sockaddr*>(&address), sizeof(address)) < 0) {
+            ::close(socket_fd_);
+            socket_fd_ = -1;
+            throw std::runtime_error("failed to bind unix listener");
+        }
+        if (listen(socket_fd_, 5) < 0) {
+            ::close(socket_fd_);
+            socket_fd_ = -1;
+            throw std::runtime_error("failed to listen for unix connections");
+        }
+    }
+
+    ~UnixDomainListener() {
+        if (socket_fd_ >= 0) {
+            ::close(socket_fd_);
+            socket_fd_ = -1;
+        }
+        unlink(socket_path_.c_str());
+    }
+
+    int accept_connection() {
+        int client_fd = ::accept(socket_fd_, nullptr, nullptr);
+        if (client_fd < 0) {
+            throw std::runtime_error("failed to accept client connection");
+        }
+        return client_fd;
     }
 
 private:
