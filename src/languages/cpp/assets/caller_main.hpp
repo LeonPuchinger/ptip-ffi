@@ -28,13 +28,14 @@ inline std::string read_socket_path_from_command(const std::string& command) {
 
     while (fgets(buffer.data(), static_cast<int>(buffer.size()), pipe) != nullptr) {
         output += buffer.data();
+        if (output.find('\n') != std::string::npos) {
+            break;
+        }
     }
 
-    const int status = pclose(pipe);
-    if (status != 0) {
-        throw std::runtime_error("library process exited with a non-zero status");
-    }
-
+    // The library process is intentionally long-lived and stays alive for the lifetime of the caller.
+    // We only need the first socket-path line to establish the bridge, and we must not block by
+    // waiting for the child to exit here.
     std::string last_line;
     std::string current;
     std::stringstream stream(output);
@@ -50,7 +51,7 @@ inline std::string read_socket_path_from_command(const std::string& command) {
     return last_line;
 }
 
-inline Bridge establish_bridge() {
+inline Bridge& establish_bridge() {
     static std::unique_ptr<Bridge> bridge;
     if (bridge != nullptr) {
         return *bridge;
@@ -62,13 +63,11 @@ inline Bridge establish_bridge() {
     }
 
     const std::string socket_path = read_socket_path_from_command(invoke);
-    auto stream = std::make_unique<UnixDomainStream>(socket_path);
-    auto socket = std::make_unique<MessageSocket>(*stream);
-    bridge = std::make_unique<Bridge>(*socket);
+    bridge = std::make_unique<Bridge>(std::make_unique<UnixDomainStream>(socket_path));
     return *bridge;
 }
 
-inline Bridge establishBridge() {
+inline Bridge& establishBridge() {
     return establish_bridge();
 }
 

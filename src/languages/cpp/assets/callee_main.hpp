@@ -1,9 +1,11 @@
 #pragma once
 
+#include <chrono>
 #include <cstdlib>
 #include <iostream>
 #include <stdexcept>
 #include <string>
+#include <unistd.h>
 
 #include "bridge.hpp"
 #include "dispatch.hpp"
@@ -11,21 +13,15 @@
 
 namespace ptip_ffi {
 
-inline std::string resolve_library_path() {
-    const char* value = std::getenv("FFI_LIBRARY_INVOKE");
-    return value == nullptr ? std::string() : std::string(value);
-}
-
 inline int run_library_server() {
-    const std::string socket_path = resolve_library_path();
-    if (socket_path.empty()) {
-        throw std::runtime_error("FFI_LIBRARY_INVOKE is not set");
-    }
+    const auto now = std::chrono::steady_clock::now().time_since_epoch().count();
+    const std::string socket_path = "/tmp/ptip_ffi_cpp_" + std::to_string(getpid()) + "_" + std::to_string(now) + ".sock";
+
+    UnixDomainListener listener(socket_path);
 
     std::cout << socket_path << std::endl;
     std::cout.flush();
 
-    UnixDomainListener listener(socket_path);
     while (true) {
         const int client_fd = listener.accept_connection();
         UnixDomainStream stream(client_fd);
@@ -35,7 +31,10 @@ inline int run_library_server() {
             if (payload.empty()) {
                 break;
             }
-            (void)payload;
+            const std::string response = ptip_ffi_generated::dispatch_message(payload);
+            if (!response.empty()) {
+                socket.send(response);
+            }
         }
     }
     return 0;

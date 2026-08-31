@@ -1,6 +1,7 @@
 #pragma once
 
 #include <array>
+#include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
@@ -8,6 +9,7 @@
 #include <string>
 #include <sys/socket.h>
 #include <sys/un.h>
+#include <thread>
 #include <unistd.h>
 #include <vector>
 
@@ -26,21 +28,33 @@ public:
     explicit UnixDomainStream(int fd) : socket_fd_(fd) {}
 
     explicit UnixDomainStream(const std::string& socket_path) : socket_path_(socket_path) {
-        socket_fd_ = socket(AF_UNIX, SOCK_STREAM, 0);
-        if (socket_fd_ < 0) {
-            throw std::runtime_error("failed to create unix socket");
-        }
+        constexpr int attempts = 50;
+        constexpr auto delay = std::chrono::milliseconds(20);
 
-        sockaddr_un address{};
-        std::memset(&address, 0, sizeof(address));
-        address.sun_family = AF_UNIX;
-        std::strncpy(address.sun_path, socket_path_.c_str(), sizeof(address.sun_path) - 1);
+        for (int attempt = 0; attempt < attempts; ++attempt) {
+            socket_fd_ = socket(AF_UNIX, SOCK_STREAM, 0);
+            if (socket_fd_ < 0) {
+                throw std::runtime_error("failed to create unix socket");
+            }
 
-        if (connect(socket_fd_, reinterpret_cast<sockaddr*>(&address), sizeof(address)) < 0) {
+            sockaddr_un address{};
+            std::memset(&address, 0, sizeof(address));
+            address.sun_family = AF_UNIX;
+            std::strncpy(address.sun_path, socket_path_.c_str(), sizeof(address.sun_path) - 1);
+
+            if (connect(socket_fd_, reinterpret_cast<sockaddr*>(&address), sizeof(address)) == 0) {
+                return;
+            }
+
             ::close(socket_fd_);
             socket_fd_ = -1;
-            throw std::runtime_error("failed to connect to library socket");
+
+            if (attempt + 1 < attempts) {
+                std::this_thread::sleep_for(delay);
+            }
         }
+
+        throw std::runtime_error("failed to connect to library socket");
     }
 
     ~UnixDomainStream() override {

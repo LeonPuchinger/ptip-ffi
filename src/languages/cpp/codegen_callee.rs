@@ -109,5 +109,15 @@ mod tests {
         assert!(dispatch.content.contains("dispatch_identity"));
         assert!(main_entrypoint.content.contains("int main()"));
         assert!(main_entrypoint.content.contains("run_library_server"));
+
+        let main_header = outputs
+            .iter()
+            .find(|output| output.path == Path::new("main.hpp"))
+            .expect("main.hpp should be generated");
+        assert!(main_header.content.contains("UnixDomainListener listener(socket_path);"));
+        assert!(main_header.content.contains("std::cout << socket_path"));
+        assert!(main_header.content.contains("socket_path"));
+        assert!(!main_header.content.contains("FFI_LIBRARY_INVOKE"));
+        assert!(!main_header.content.contains("resolve_library_path"));
     }
 }

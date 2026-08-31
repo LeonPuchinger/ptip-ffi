@@ -89,7 +89,7 @@ fn render_function_stub(_engine: &TemplateEngine, function: &FunctionDefinition)
     }
 
     out.push_str("    const std::string return_sink = ptip_ffi::generate_uuid();\n");
-    out.push_str("    auto bridge = ptip_ffi::establishBridge();\n");
+    out.push_str("    auto& bridge = ptip_ffi::establishBridge();\n");
     out.push_str("    bridge.send_message(\"C\\n\" + ptip_ffi::serialize_invocation_path(\"\", \"");
     out.push_str(&function.name);
     out.push_str("\") + \"\\n\" + return_sink");
@@ -120,7 +120,7 @@ fn render_type_stub(engine: &TemplateEngine, definition: &TypeDefinition) -> Str
         ctor.push_str(&render_parameters(&constructor.positional_parameters));
         ctor.push_str(") {\n");
         ctor.push_str("    const std::string return_sink = ptip_ffi::generate_uuid();\n");
-        ctor.push_str("    auto bridge = ptip_ffi::establishBridge();\n");
+        ctor.push_str("    auto& bridge = ptip_ffi::establishBridge();\n");
         ctor.push_str("    bridge.send_message(\"C\\n\" + ptip_ffi::serialize_invocation_path(\"\", \"");
         ctor.push_str(&definition.name);
         ctor.push_str("\") + \"\\n\" + return_sink");
@@ -136,6 +136,24 @@ fn render_type_stub(engine: &TemplateEngine, definition: &TypeDefinition) -> Str
         ctor.push_str("    if (lines.size() < 3 || lines[0] != \"S\" || lines[1] != return_sink) {\n        throw std::runtime_error(\"Unexpected bridge response\");\n    }\n");
         ctor.push_str("    const auto value = ptip_ffi::decode_parameter_line(lines[2]);\n");
         ctor.push_str("    if (value.kind != ptip_ffi::ParameterKind::Reference) {\n        throw std::runtime_error(\"Constructor did not return a reference\");\n    }\n");
+        ctor.push_str("    this->uuid = value.value;\n");
+        ctor.push_str("  }");
+        members.push(ctor);
+    } else {
+        let mut ctor = String::new();
+        ctor.push_str(&definition.name);
+        ctor.push_str("() {\n");
+        ctor.push_str("    const std::string return_sink = ptip_ffi::generate_uuid();\n");
+        ctor.push_str("    auto& bridge = ptip_ffi::establishBridge();\n");
+        ctor.push_str("    bridge.send_message(\"C\\n\" + ptip_ffi::serialize_invocation_path(\"\", \"");
+        ctor.push_str(&definition.name);
+        ctor.push_str("\") + \"\\n\" + return_sink);\n");
+        ctor.push_str("    const std::string response = bridge.next_message();\n");
+        ctor.push_str("    if (response.empty()) {\n        throw std::runtime_error(\"No response received from the bridge\");\n    }\n");
+        ctor.push_str("    const auto lines = ptip_ffi::split_message_lines(response);\n");
+        ctor.push_str("    if (lines.size() < 3 || lines[0] != \"S\" || lines[1] != return_sink) {\n        throw std::runtime_error(\"Unexpected bridge response\");\n    }\n");
+        ctor.push_str("    const auto value = ptip_ffi::decode_parameter_line(lines[2]);\n");
+        ctor.push_str("    if (value.kind != ptip_ffi::ParameterKind::Reference) {\n        throw std::runtime_error(\"Default constructor did not return a reference\");\n    }\n");
         ctor.push_str("    this->uuid = value.value;\n");
         ctor.push_str("  }");
         members.push(ctor);
@@ -216,7 +234,7 @@ fn render_method_stub(_engine: &TemplateEngine, method: &Method) -> String {
     }
 
     out.push_str("    const std::string return_sink = ptip_ffi::generate_uuid();\n");
-    out.push_str("    auto bridge = ptip_ffi::establishBridge();\n");
+    out.push_str("    auto& bridge = ptip_ffi::establishBridge();\n");
     out.push_str("    bridge.send_message(\"M\\n\" + this->uuid + \"\\n\" + ptip_ffi::encode_base64_no_pad_utf8(\"");
     out.push_str(&method.name);
     out.push_str("\") + \"\\n\" + return_sink");
@@ -296,11 +314,23 @@ fn render_bridge_return_statement(r#type: &Type, value_name: &str) -> String {
             } else {
                 format!("{}::{}", path.module_path.format("::"), path.name)
             };
-            format!(
-                "    if ({value_name}.kind == ptip_ffi::ParameterKind::Reference) {{\n        return ptip_ffi::decode_value<{type_name}>({value_name});\n    }}\n    throw std::runtime_error(\"Unexpected return type\");",
-                value_name = value_name,
-                type_name = type_name,
-            )
+            let is_template_parameter = path.module_path.segments.is_empty()
+                && path.type_arguments.is_empty()
+                && path.name.len() == 1
+                && path.name.chars().next().is_some_and(|ch| ch.is_ascii_uppercase());
+            if is_template_parameter {
+                format!(
+                    "    return ptip_ffi::decode_value<{type_name}>({value_name});",
+                    value_name = value_name,
+                    type_name = type_name,
+                )
+            } else {
+                format!(
+                    "    if ({value_name}.kind == ptip_ffi::ParameterKind::Reference) {{\n        return ptip_ffi::decode_value<{type_name}>({value_name});\n    }}\n    throw std::runtime_error(\"Unexpected return type\");",
+                    value_name = value_name,
+                    type_name = type_name,
+                )
+            }
         }
         Type::Pointer(inner) => render_bridge_return_statement(inner, value_name),
         Type::Array(_) | Type::Tuple(_) => {

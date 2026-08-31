@@ -82,18 +82,20 @@ struct DropMessage {
 
 class Bridge {
 public:
-    explicit Bridge(class MessageSocket& socket) : socket_(socket) {}
+    explicit Bridge(std::unique_ptr<class UnixDomainStream> stream)
+        : stream_(std::move(stream)), socket_(std::make_unique<class MessageSocket>(*stream_)) {}
 
     std::string next_message() {
-        return socket_.receive();
+        return socket_->receive();
     }
 
     void send_message(const std::string& payload) {
-        socket_.send(payload);
+        socket_->send(payload);
     }
 
 private:
-    class MessageSocket& socket_;
+    std::unique_ptr<class UnixDomainStream> stream_;
+    std::unique_ptr<class MessageSocket> socket_;
 };
 
 class ManagedReference {
@@ -298,14 +300,9 @@ inline T decode_value(const Parameter& parameter) {
 inline std::string encode_parameter_line(const Parameter& parameter, const std::string* name = nullptr) {
     std::string main;
     switch (parameter.kind) {
-        case ParameterKind::Integer: {
-            std::int64_t value = std::stoll(parameter.value);
-            std::stringstream stream;
-            const std::uint64_t magnitude = value < 0 ? static_cast<std::uint64_t>(-(value + 1)) + 1ULL : static_cast<std::uint64_t>(value);
-            stream << std::hex << std::nouppercase << magnitude;
-            main = std::string("i") + (value < 0 ? "-" : "") + stream.str();
+        case ParameterKind::Integer:
+            main = std::string("i") + parameter.value;
             break;
-        }
         case ParameterKind::Float:
             main = std::string("f") + parameter.value;
             break;
