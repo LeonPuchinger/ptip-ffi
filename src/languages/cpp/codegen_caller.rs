@@ -24,7 +24,7 @@ pub fn generate_caller(modules: Vec<&Module>) -> Vec<CodegenOutput> {
             content: CALLER_SOCKET.to_owned(),
         },
         CodegenOutput {
-            path: PathBuf::from("main.hpp"),
+            path: PathBuf::from("ffi/main.hpp"),
             content: CALLER_MAIN.to_owned(),
         },
         CodegenOutput {
@@ -69,25 +69,83 @@ fn render_function_stub(_engine: &TemplateEngine, function: &FunctionDefinition)
     let type_parameters = render_type_parameters(&function.callable.type_parameters);
     let return_type = render_type_name(&function.callable.return_type);
     let parameters = render_parameters(&function.callable.positional_parameters);
-    format!("{}{} {}({});", type_parameters, return_type, function.name, parameters)
+
+    let mut out = String::new();
+    out.push_str(&type_parameters);
+    out.push_str(&return_type);
+    out.push(' ');
+    out.push_str(&function.name);
+    out.push('(');
+    out.push_str(&parameters);
+    out.push_str(") {\n");
+
+    for parameter in &function.callable.positional_parameters {
+        out.push_str("    const ptip_ffi::Parameter ");
+        out.push_str(&parameter.name);
+        out.push_str(" = ");
+        out.push_str(&render_parameter_value_cpp(&parameter.r#type, &parameter.name));
+        out.push_str(";\n");
+    }
+
+    out.push_str("    const std::string return_sink = ptip_ffi::generate_uuid();\n");
+    out.push_str("    auto bridge = ptip_ffi::establishBridge();\n");
+    out.push_str("    bridge.send_message(\"C\\n\" + ptip_ffi::serialize_invocation_path(\"\", \"");
+    out.push_str(&function.name);
+    out.push_str("\") + \"\\n\" + return_sink");
+    for parameter in &function.callable.positional_parameters {
+        out.push_str(" + \"\\n\" + ptip_ffi::encode_parameter_line(");
+        out.push_str(&parameter.name);
+        out.push_str(")");
+    }
+    out.push_str(");\n");
+    out.push_str("    const std::string response = bridge.next_message();\n");
+    out.push_str("    if (response.empty()) {\n        throw std::runtime_error(\"No response received from the bridge\");\n    }\n");
+    out.push_str("    const auto lines = ptip_ffi::split_message_lines(response);\n");
+    out.push_str("    if (lines.size() < 3 || lines[0] != \"S\" || lines[1] != return_sink) {\n        if (lines.size() >= 2 && lines[0] == \"E\") {\n            throw std::runtime_error(\"FFI call failed\");\n        }\n        throw std::runtime_error(\"Unexpected bridge response\");\n    }\n");
+    out.push_str("    const auto value = ptip_ffi::decode_parameter_line(lines[2]);\n");
+    out.push_str(&render_bridge_return_statement(&function.callable.return_type));
+    out.push_str("\n}");
+    out
 }
 
 fn render_type_stub(engine: &TemplateEngine, definition: &TypeDefinition) -> String {
     let type_parameters = render_type_parameters(&definition.type_parameters);
     let mut members = Vec::new();
+    members.push("std::string uuid;".to_string());
     if let Some(constructor) = &definition.default_constructor {
-        members.push(format!(
-            "{}({});",
-            definition.name,
-            render_parameters(&constructor.positional_parameters)
-        ));
+        let mut ctor = String::new();
+        ctor.push_str(&definition.name);
+        ctor.push('(');
+        ctor.push_str(&render_parameters(&constructor.positional_parameters));
+        ctor.push_str(") {\n");
+        ctor.push_str("    const std::string return_sink = ptip_ffi::generate_uuid();\n");
+        ctor.push_str("    auto bridge = ptip_ffi::establishBridge();\n");
+        ctor.push_str("    bridge.send_message(\"C\\n\" + ptip_ffi::serialize_invocation_path(\"\", \"");
+        ctor.push_str(&definition.name);
+        ctor.push_str("\") + \"\\n\" + return_sink");
+        for parameter in &constructor.positional_parameters {
+            ctor.push_str(" + \"\\n\" + ptip_ffi::encode_parameter_line(");
+            ctor.push_str(&render_parameter_value_cpp(&parameter.r#type, &parameter.name));
+            ctor.push_str(")");
+        }
+        ctor.push_str(");\n");
+        ctor.push_str("    const std::string response = bridge.next_message();\n");
+        ctor.push_str("    if (response.empty()) {\n        throw std::runtime_error(\"No response received from the bridge\");\n    }\n");
+        ctor.push_str("    const auto lines = ptip_ffi::split_message_lines(response);\n");
+        ctor.push_str("    if (lines.size() < 3 || lines[0] != \"S\" || lines[1] != return_sink) {\n        throw std::runtime_error(\"Unexpected bridge response\");\n    }\n");
+        ctor.push_str("    const auto value = ptip_ffi::decode_parameter_line(lines[2]);\n");
+        ctor.push_str("    if (value.kind != ptip_ffi::ParameterKind::Reference) {\n        throw std::runtime_error(\"Constructor did not return a reference\");\n    }\n");
+        ctor.push_str("    this->uuid = value.value;\n");
+        ctor.push_str("  }");
+        members.push(ctor);
     }
     for constructor in &definition.named_constructors {
         members.push(format!(
-            "static {} {}({});",
+            "static {} {}({}) {{ return {}; }}",
             render_type_name(&constructor.callable.return_type),
             constructor.name,
-            render_parameters(&constructor.callable.positional_parameters)
+            render_parameters(&constructor.callable.positional_parameters),
+            constructor.name
         ));
     }
     for property in &definition.properties {
@@ -99,6 +157,11 @@ fn render_type_stub(engine: &TemplateEngine, definition: &TypeDefinition) -> Str
     for method in &definition.static_methods {
         members.push(render_method_stub(engine, method));
     }
+    members.push(format!(
+        "static {} __fromReference(const std::string& value) {{\n    {} instance;\n    instance.uuid = value;\n    return instance;\n}}",
+        definition.name,
+        definition.name
+    ));
 
     if members.is_empty() {
         format!("{}struct {} {{}};", type_parameters, definition.name)
@@ -113,14 +176,97 @@ fn render_type_stub(engine: &TemplateEngine, definition: &TypeDefinition) -> Str
 }
 
 fn render_method_stub(_engine: &TemplateEngine, method: &Method) -> String {
-    format!(
-        "{}{} {}({}){};",
-        if method.r#static { "static " } else { "" },
-        render_type_name(&method.callable.return_type),
-        method.name,
-        render_parameters(&method.callable.positional_parameters),
-        if method.r#static { "" } else { " const" }
-    )
+    let parameters = render_parameters(&method.callable.positional_parameters);
+
+    let mut out = String::new();
+    if method.r#static {
+        out.push_str("static ");
+    }
+    out.push_str(&render_type_name(&method.callable.return_type));
+    out.push(' ');
+    out.push_str(&method.name);
+    out.push('(');
+    out.push_str(&parameters);
+    out.push_str(")");
+    if !method.r#static {
+        out.push_str(" const");
+    }
+    out.push_str(" {\n");
+
+    for parameter in &method.callable.positional_parameters {
+        out.push_str("    const ptip_ffi::Parameter ");
+        out.push_str(&parameter.name);
+        out.push_str(" = ");
+        out.push_str(&render_parameter_value_cpp(&parameter.r#type, &parameter.name));
+        out.push_str(";\n");
+    }
+
+    out.push_str("    const std::string return_sink = ptip_ffi::generate_uuid();\n");
+    out.push_str("    auto bridge = ptip_ffi::establishBridge();\n");
+    out.push_str("    bridge.send_message(\"M\\n\" + this->uuid + \"\\n\" + ptip_ffi::encode_base64_no_pad_utf8(\"");
+    out.push_str(&method.name);
+    out.push_str("\") + \"\\n\" + return_sink");
+    for parameter in &method.callable.positional_parameters {
+        out.push_str(" + \"\\n\" + ptip_ffi::encode_parameter_line(");
+        out.push_str(&parameter.name);
+        out.push_str(")");
+    }
+    out.push_str(");\n");
+    out.push_str("    const std::string response = bridge.next_message();\n");
+    out.push_str("    if (response.empty()) {\n        throw std::runtime_error(\"No response received from the bridge\");\n    }\n");
+    out.push_str("    const auto lines = ptip_ffi::split_message_lines(response);\n");
+    out.push_str("    if (lines.size() < 3 || lines[0] != \"S\" || lines[1] != return_sink) {\n        if (lines.size() >= 2 && lines[0] == \"E\") {\n            throw std::runtime_error(\"FFI call failed\");\n        }\n        throw std::runtime_error(\"Unexpected bridge response\");\n    }\n");
+    out.push_str("    const auto value = ptip_ffi::decode_parameter_line(lines[2]);\n");
+    out.push_str(&render_bridge_return_statement(&method.callable.return_type));
+    out.push_str("\n}");
+    out
+}
+
+fn render_parameter_value_cpp(r#type: &Type, name: &str) -> String {
+    match r#type {
+        Type::Primitive(crate::features::PrimitiveType::Number) => {
+            format!("ptip_ffi::Parameter{{ptip_ffi::ParameterKind::Float, std::to_string({})}}", name)
+        }
+        Type::Primitive(crate::features::PrimitiveType::String) => {
+            format!("ptip_ffi::Parameter{{ptip_ffi::ParameterKind::String, {}}}", name)
+        }
+        Type::Primitive(crate::features::PrimitiveType::Boolean) => {
+            format!("ptip_ffi::Parameter{{ptip_ffi::ParameterKind::Boolean, {} ? \"1\" : \"0\"}}", name)
+        }
+        Type::Composite(_) => {
+            format!("ptip_ffi::Parameter{{ptip_ffi::ParameterKind::Reference, {}.uuid}}", name)
+        }
+        Type::Array(_) | Type::Tuple(_) | Type::Dynamic => {
+            format!("ptip_ffi::Parameter{{ptip_ffi::ParameterKind::String, std::string(\"\")}}")
+        }
+    }
+}
+
+fn render_bridge_return_statement(r#type: &Type) -> String {
+    match r#type {
+        Type::Primitive(crate::features::PrimitiveType::Number) => {
+            "    if (value.kind == ptip_ffi::ParameterKind::Float || value.kind == ptip_ffi::ParameterKind::Integer) {\n        return std::stod(value.value);\n    }\n    throw std::runtime_error(\"Unexpected return type\");".to_string()
+        }
+        Type::Primitive(crate::features::PrimitiveType::String) => {
+            "    if (value.kind == ptip_ffi::ParameterKind::String) {\n        return value.value;\n    }\n    throw std::runtime_error(\"Unexpected return type\");".to_string()
+        }
+        Type::Primitive(crate::features::PrimitiveType::Boolean) => {
+            "    if (value.kind == ptip_ffi::ParameterKind::Boolean) {\n        return value.value == \"1\";\n    }\n    throw std::runtime_error(\"Unexpected return type\");".to_string()
+        }
+        Type::Composite(path) => {
+            let type_name = if path.module_path.segments.is_empty() {
+                path.name.clone()
+            } else {
+                format!("{}::{}", path.module_path.format("::"), path.name)
+            };
+            format!(
+                "    if (value.kind == ptip_ffi::ParameterKind::Reference) {{\n        return {type_name}::__fromReference(value.value);\n    }}\n    throw std::runtime_error(\"Unexpected return type\");"
+            )
+        }
+        Type::Array(_) | Type::Tuple(_) | Type::Dynamic => {
+            "    throw std::runtime_error(\"Unsupported return type\");".to_string()
+        }
+    }
 }
 
 fn render_parameters(parameters: &[ValueParameter]) -> String {
@@ -253,8 +399,17 @@ mod tests {
             .find(|output| output.path == Path::new("index.hpp"))
             .expect("index.hpp should be generated");
 
-        assert!(index.content.contains("double add(double x, double y);"));
+        let main = outputs
+            .iter()
+            .find(|output| output.path == Path::new("ffi/main.hpp"))
+            .expect("ffi/main.hpp should be generated");
+
+        assert!(index.content.contains("#include \"ffi/main.hpp\""));
+        assert!(index.content.contains("double add(double x, double y)"));
+        assert!(index.content.contains("establishBridge();"));
+        assert!(index.content.contains("bridge.send_message("));
         assert!(index.content.contains("struct Point"));
         assert!(index.content.contains("double distance() const"));
+        assert!(main.content.contains("establishBridge"));
     }
 }

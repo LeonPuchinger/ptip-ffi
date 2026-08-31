@@ -1,7 +1,7 @@
 use std::path::Path;
 
 use crate::{
-    codegen::{copy_directory, persist_all},
+    codegen::{clear_directory, copy_directory, persist_all},
     error::PTIPFFIError,
 };
 
@@ -44,6 +44,10 @@ pub fn generate(
     )?;
     // Parse the input module
     let features = (input_config.parse)(&input)?;
+    // Ensure the generated output directories are clean so stale files from earlier layouts do not remain.
+    clear_directory(callee_output_root)?;
+    clear_directory(caller_output_root)?;
+
     // Perform code generation for both the callee and caller sides
     let callee = (input_config.generate_callee)(vec![&features]);
     let caller = (output_config.generate_caller)(vec![&features]);

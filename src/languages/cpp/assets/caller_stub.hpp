@@ -5,7 +5,7 @@
 #include <tuple>
 #include <vector>
 
-#include "main.hpp"
+#include "ffi/main.hpp"
 #include "ffi/bridge.hpp"
 #include "ffi/socket.hpp"
 

@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cctype>
 #include <cstdint>
 #include <cstdlib>
 #include <map>
@@ -117,6 +118,73 @@ inline std::string encode_base64_no_pad_utf8(const std::string& value) {
         out.pop_back();
     }
     return out;
+}
+
+inline std::string decode_base64_no_pad_utf8(const std::string& value) {
+    static const std::string alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    std::vector<int> table(256, -1);
+    for (std::size_t i = 0; i < alphabet.size(); ++i) {
+        table[static_cast<unsigned char>(alphabet[i])] = static_cast<int>(i);
+    }
+
+    std::string out;
+    out.reserve(value.size() * 3 / 4 + 1);
+    for (std::size_t i = 0; i < value.size(); i += 4) {
+        const int a = table[static_cast<unsigned char>(value[i])];
+        const int b = i + 1 < value.size() ? table[static_cast<unsigned char>(value[i + 1])] : 0;
+        const int c = i + 2 < value.size() ? table[static_cast<unsigned char>(value[i + 2])] : 0;
+        const int d = i + 3 < value.size() ? table[static_cast<unsigned char>(value[i + 3])] : 0;
+
+        if (a < 0 || b < 0) {
+            break;
+        }
+
+        const unsigned char byte0 = static_cast<unsigned char>((a << 2) | (b >> 4));
+        out.push_back(static_cast<char>(byte0));
+        if (i + 2 < value.size() && c >= 0) {
+            const unsigned char byte1 = static_cast<unsigned char>(((b & 0x0F) << 4) | (c >> 2));
+            out.push_back(static_cast<char>(byte1));
+        }
+        if (i + 3 < value.size() && d >= 0) {
+            const unsigned char byte2 = static_cast<unsigned char>(((c & 0x03) << 6) | d);
+            out.push_back(static_cast<char>(byte2));
+        }
+    }
+    return out;
+}
+
+inline std::vector<std::string> split_message_lines(const std::string& message) {
+    std::vector<std::string> lines;
+    std::stringstream stream(message);
+    std::string line;
+    while (std::getline(stream, line)) {
+        if (!line.empty()) {
+            lines.push_back(line);
+        }
+    }
+    return lines;
+}
+
+inline Parameter decode_parameter_line(const std::string& line) {
+    if (line.empty()) {
+        throw std::invalid_argument("empty parameter line");
+    }
+    const char kind = line[0];
+    const std::string payload = line.size() > 1 ? line.substr(1) : std::string();
+    switch (kind) {
+        case 'i':
+            return Parameter{ParameterKind::Integer, payload};
+        case 'f':
+            return Parameter{ParameterKind::Float, payload};
+        case 'b':
+            return Parameter{ParameterKind::Boolean, payload == "1" ? "1" : "0"};
+        case 's':
+            return Parameter{ParameterKind::String, decode_base64_no_pad_utf8(payload)};
+        case 'r':
+            return Parameter{ParameterKind::Reference, payload};
+        default:
+            throw std::invalid_argument("unknown parameter tag");
+    }
 }
 
 inline std::string encode_parameter_line(const Parameter& parameter, const std::string* name = nullptr) {

@@ -16,6 +16,15 @@
 
 namespace ptip_ffi {
 
+inline std::uint64_t next_uuid_counter() {
+    static std::uint64_t counter = 0;
+    return ++counter;
+}
+
+inline std::string generate_uuid() {
+    return "uuid-" + std::to_string(next_uuid_counter());
+}
+
 inline std::string resolve_library_invoke() {
     const char* value = std::getenv("FFI_LIBRARY_INVOKE");
     return value == nullptr ? std::string() : std::string(value);
@@ -122,6 +131,10 @@ inline Bridge establish_bridge() {
     auto socket = std::make_unique<MessageSocket>(*stream);
     bridge = std::make_unique<Bridge>(*socket);
     return *bridge;
+}
+
+inline Bridge establishBridge() {
+    return establish_bridge();
 }
 
 class ManagedReference {
