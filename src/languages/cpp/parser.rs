@@ -97,6 +97,13 @@ fn split_top_level_semicolons(input: &str) -> Vec<String> {
                 if brace_depth > 0 {
                     brace_depth -= 1;
                 }
+                if brace_depth == 0 {
+                    let segment = input[start..index + ch.len_utf8()].trim();
+                    if !segment.is_empty() {
+                        chunks.push(segment.to_string());
+                    }
+                    start = index + ch.len_utf8();
+                }
             }
             '(' => paren_depth += 1,
             ')' => {
@@ -173,47 +180,74 @@ fn parse_type_parameters(raw: &str) -> Vec<TypeParameter> {
 }
 
 fn parse_type_name(type_name: &str) -> Type {
-    let cleaned = type_name
+    let mut cleaned = type_name
         .replace("const ", "")
         .replace("volatile ", "")
-        .replace("&", "")
-        .replace("*", "")
+        .replace(" : : ", "::")
+        .replace(":: ", "::")
+        .replace(" ::", "::")
+        .replace("inline ", "")
+        .replace("static ", "")
+        .replace("constexpr ", "")
+        .replace("typename ", "")
+        .replace("class ", "")
+        .replace("struct ", "")
+        .replace("virtual ", "")
+        .replace(" ", "")
         .trim()
         .to_string();
+
+    let mut pointer_depth = 0usize;
+    while cleaned.ends_with('*') {
+        pointer_depth += 1;
+        cleaned = cleaned[..cleaned.trim_end().len() - 1].trim().to_string();
+    }
+
+    let mut reference_depth = 0usize;
+    while cleaned.ends_with('&') {
+        reference_depth += 1;
+        cleaned = cleaned[..cleaned.trim_end().len() - 1].trim().to_string();
+    }
+
     if cleaned.is_empty() {
         return Type::Dynamic;
     }
-    match cleaned.as_str() {
-        "int" | "long" | "short" => Type::Primitive(PrimitiveType::Number),
+
+    let (base_text, type_arguments) = if let (Some(open), Some(close)) = (cleaned.find('<'), cleaned.rfind('>')) {
+        if open < close {
+            let base = cleaned[..open].trim().to_string();
+            let inner = &cleaned[open + 1..close];
+            let args = split_top_level_commas(inner)
+                .into_iter()
+                .map(parse_type_name)
+                .collect::<Vec<_>>();
+            (base, args)
+        } else {
+            (cleaned.clone(), Vec::new())
+        }
+    } else {
+        (cleaned.clone(), Vec::new())
+    };
+
+    let mut result = match base_text.as_str() {
+        "int" | "long" | "short" | "size_t" | "std::size_t" => Type::Primitive(PrimitiveType::Number),
         "double" | "float" => Type::Primitive(PrimitiveType::Number),
         "bool" => Type::Primitive(PrimitiveType::Boolean),
         "std::string" | "string" => Type::Primitive(PrimitiveType::String),
         "void" => Type::Dynamic,
         _ => {
-            let type_arguments = if let (Some(open), Some(close)) = (cleaned.find('<'), cleaned.rfind('>'))
-            {
-                if open < close {
-                    let inner = &cleaned[open + 1..close];
-                    split_top_level_commas(inner)
-                        .into_iter()
-                        .map(parse_type_name)
-                        .collect::<Vec<_>>()
-                } else {
-                    Vec::new()
-                }
-            } else {
-                Vec::new()
-            };
-
-            let base = if cleaned.contains("::") {
-                let mut segments = cleaned.split("::").filter(|segment| !segment.is_empty()).collect::<Vec<_>>();
-                let name = segments.pop().unwrap_or(&cleaned).to_string();
+            let base = if base_text.contains("::") {
+                let mut segments = base_text
+                    .split("::")
+                    .filter(|segment| !segment.is_empty())
+                    .collect::<Vec<_>>();
+                let name = segments.pop().unwrap_or(&base_text).to_string();
                 let module_path = ModulePath::new(segments.iter().copied().collect::<Vec<_>>());
                 TypePath { module_path, name, type_arguments: Vec::new() }
             } else {
                 TypePath {
                     module_path: ModulePath::empty(),
-                    name: cleaned.clone(),
+                    name: base_text.clone(),
                     type_arguments: Vec::new(),
                 }
             };
@@ -226,7 +260,15 @@ fn parse_type_name(type_name: &str) -> Type {
             }
             result
         }
+    };
+
+    for _ in 0..pointer_depth {
+        result = Type::Pointer(Box::new(result));
     }
+    // C++ references are semantically distinct from pointers; keep the underlying type
+    // and do not reify them as pointer nodes for the shared Type enum.
+    let _ = reference_depth;
+    result
 }
 
 fn parse_parameter_text(parameter: &str) -> Option<ValueParameter> {
@@ -234,21 +276,27 @@ fn parse_parameter_text(parameter: &str) -> Option<ValueParameter> {
     if cleaned.is_empty() || cleaned == "void" || cleaned == "..." {
         return None;
     }
-    let trimmed = cleaned.strip_suffix("const").unwrap_or(cleaned).trim();
-    let identifier_start = trimmed.rfind(char::is_whitespace)
-        .map(|index| trimmed[index + 1..].trim_start().to_string())
+
+    let without_default = cleaned.split('=').next().unwrap_or(cleaned).trim();
+    let trimmed = without_default.strip_suffix("const").unwrap_or(without_default).trim();
+
+    let identifier_start = trimmed
+        .rsplit_once(char::is_whitespace)
+        .map(|(_, tail)| tail.trim_start().to_string())
         .unwrap_or_else(|| trimmed.to_string());
+
     let name = if identifier_start.is_empty() {
         return None;
     } else {
-        let without_qualifiers = identifier_start
+        identifier_start
             .trim_end_matches(&['&', '*'][..])
-            .to_string();
-        without_qualifiers
+            .to_string()
     };
+
     let type_part = trimmed.strip_suffix(&name).unwrap_or(trimmed).trim();
     let name = name.trim_end_matches(['&', '*']);
     let type_part = type_part.trim();
+
     Some(ValueParameter {
         name: name.to_string(),
         r#type: parse_type_name(type_part),
@@ -260,12 +308,31 @@ fn parse_parameter_text(parameter: &str) -> Option<ValueParameter> {
 
 fn parse_callable(signature: &str, type_parameters: Vec<TypeParameter>) -> AnonymousCallable {
     let open = signature.find('(').unwrap_or(signature.len());
-    let close = signature.rfind(')').unwrap_or(signature.len());
+    let close = signature[open + 1..]
+        .char_indices()
+        .fold((0usize, None), |(depth, close_index), (idx, ch)| {
+            match ch {
+                '(' => (depth + 1, close_index),
+                ')' => {
+                    if depth == 0 {
+                        (depth, Some(open + 1 + idx))
+                    } else {
+                        (depth - 1, close_index)
+                    }
+                }
+                _ => (depth, close_index),
+            }
+        })
+        .1
+        .unwrap_or(signature.len());
     let before_paren = signature[..open].trim();
     let params = &signature[open + 1..close];
-    let name_end = before_paren.rfind(char::is_whitespace).unwrap_or(before_paren.len());
-    let mut return_type = before_paren[..name_end].trim();
-    let name = before_paren[name_end..].trim();
+
+    let (return_type, name) = match before_paren.rfind(char::is_whitespace) {
+        Some(index) => (before_paren[..index].trim(), before_paren[index + 1..].trim()),
+        None => ("", before_paren.trim()),
+    };
+
     if name.is_empty() {
         return AnonymousCallable {
             positional_parameters: Vec::new(),
@@ -274,20 +341,76 @@ fn parse_callable(signature: &str, type_parameters: Vec<TypeParameter>) -> Anony
             type_parameters,
         };
     }
-    if return_type.is_empty() {
-        return_type = "void";
-    }
+
+    let mut return_type = if return_type.is_empty() { "void" } else { return_type };
     let positional = split_top_level_commas(params)
         .into_iter()
         .filter(|part| !part.trim().is_empty())
         .filter_map(parse_parameter_text)
         .collect::<Vec<_>>();
+
     AnonymousCallable {
         positional_parameters: positional,
         named_parameters: Vec::new(),
         return_type: parse_type_name(return_type),
         type_parameters,
     }
+}
+
+fn looks_like_function_declaration(before: &str) -> bool {
+    let trimmed = before.trim();
+    if trimmed.is_empty() {
+        return false;
+    }
+
+    if trimmed.contains('=') || trimmed.contains("->") || trimmed.contains('.') {
+        return false;
+    }
+
+    let last_name = trimmed.split_whitespace().last().unwrap_or(trimmed);
+    let prefix = trimmed.strip_suffix(last_name).unwrap_or("").trim();
+    if prefix.contains('.') || prefix.contains("->") || prefix.contains('=') {
+        return false;
+    }
+
+    if [
+        "return", "if", "while", "for", "switch", "case", "catch", "throw", "new", "delete",
+    ]
+    .contains(&last_name)
+    {
+        return false;
+    }
+
+    last_name
+        .chars()
+        .all(|ch| ch.is_ascii_alphanumeric() || ch == '_' || ch == ':')
+}
+
+fn has_member_call_prefix(input: &str, cursor: usize) -> bool {
+    let before = &input[..cursor.min(input.len())];
+    let trimmed = before.trim_end();
+    if trimmed.ends_with('.') || trimmed.ends_with("->") || trimmed.ends_with("::") {
+        return true;
+    }
+    if trimmed.ends_with(')') {
+        let mut depth = 0usize;
+        for ch in trimmed.chars().rev() {
+            match ch {
+                ')' => depth += 1,
+                '(' => {
+                    if depth == 0 {
+                        return false;
+                    }
+                    depth -= 1;
+                    if depth == 0 {
+                        return true;
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    false
 }
 
 fn parse_function_from_text(signature: &str) -> Result<FunctionDefinition, ParserError> {
@@ -297,10 +420,14 @@ fn parse_function_from_text(signature: &str) -> Result<FunctionDefinition, Parse
     }
     let open = signature.find('(').unwrap();
     let before = signature[..open].trim();
-    let last_space = before.rfind(char::is_whitespace).unwrap_or(before.len());
-    let name = before[last_space..].trim();
-    let return_type = before[..last_space].trim();
-    if name.is_empty() || return_type.is_empty() {
+    if !looks_like_function_declaration(before) {
+        return Err(ParserError::Custom(format!("Not a function declaration: {signature}")));
+    }
+    let (return_type, name) = match before.rfind(char::is_whitespace) {
+        Some(index) => (before[..index].trim(), before[index + 1..].trim()),
+        None => ("", before.trim()),
+    };
+    if name.is_empty() {
         return Err(ParserError::Custom(format!("Malformed function signature: {signature}")));
     }
     let callable = parse_callable(signature, Vec::new());
@@ -319,23 +446,49 @@ fn parse_type_body(body: &str, type_name: &str) -> TypeDefinition {
 
     for member in split_top_level_semicolons(body) {
         let member = member.trim();
-        if member.is_empty() || member.starts_with("public:") || member.starts_with("private:") || member.starts_with("protected:") {
+        let canonical_member = member
+            .replace("public :", "public:")
+            .replace("private :", "private:")
+            .replace("protected :", "protected:")
+            .replace("public : ", "public:")
+            .replace("private : ", "private:")
+            .replace("protected : ", "protected:")
+            .trim()
+            .to_string();
+        if canonical_member == "public:" || canonical_member == "private:" || canonical_member == "protected:" {
             continue;
         }
-        let member_upper = member.replace("const", "").trim().to_string();
+        let member_body = canonical_member
+            .strip_prefix("public:")
+            .or_else(|| canonical_member.strip_prefix("private:"))
+            .or_else(|| canonical_member.strip_prefix("protected:"))
+            .unwrap_or(&canonical_member)
+            .trim();
+        if member_body.is_empty() {
+            continue;
+        }
+        let member_upper = member_body.replace("const", "").trim().to_string();
         if member_upper.contains('(') && member_upper.contains(')') {
             let open = member_upper.find('(').unwrap();
             let return_part = member_upper[..open].trim();
-            let last_space = return_part.rfind(char::is_whitespace).unwrap_or(return_part.len());
-            let method_name = return_part[last_space..].trim();
-            let method_return = return_part[..last_space].trim();
+            let last_space = return_part.rfind(char::is_whitespace).unwrap_or(0);
+            let method_name = if last_space == 0 && !return_part.is_empty() {
+                return_part.to_string()
+            } else {
+                return_part[last_space..].trim().to_string()
+            };
+            let method_return = if last_space == 0 {
+                ""
+            } else {
+                return_part[..last_space].trim()
+            };
             let callable = parse_callable(&member_upper, Vec::new());
             let method = Method {
                 name: method_name.to_string(),
                 r#static: false,
                 callable: callable.clone(),
             };
-            if method_name == type_name {
+            if method_name == type_name || (method_name == "" && return_part == type_name) {
                 default_constructor = Some(callable.clone());
             } else if method_return == type_name {
                 named_constructors.push(FunctionDefinition {
@@ -347,11 +500,11 @@ fn parse_type_body(body: &str, type_name: &str) -> TypeDefinition {
             }
             continue;
         }
-        let mut parts = member.split_whitespace();
-        let type_part = parts.next();
-        let name_part = parts.next();
-        if let (Some(type_name_text), Some(property_name)) = (type_part, name_part) {
-            properties.push((property_name.to_string(), parse_type_name(type_name_text)));
+        let tokens: Vec<&str> = member_body.split_whitespace().collect();
+        if tokens.len() >= 2 {
+            let property_name = tokens[tokens.len() - 1];
+            let type_part = tokens[..tokens.len() - 1].join(" ");
+            properties.push((property_name.to_string(), parse_type_name(&type_part)));
         }
     }
 
@@ -460,7 +613,13 @@ fn parse_function_signature_from_lexer<'input>(
 
     let text = tokens.join(" ");
     if text.contains('(') && text.contains(')') {
-        Ok(text)
+        let open = text.find('(').unwrap();
+        let before = text[..open].trim();
+        if looks_like_function_declaration(before) {
+            Ok(text)
+        } else {
+            Err(ParserError::Custom("not a function-like declaration".to_string()))
+        }
     } else {
         Err(ParserError::Custom("not a function-like declaration".to_string()))
     }
@@ -596,6 +755,11 @@ pub fn parse(input: &str) -> Result<Module, ParserError> {
             AnchorLocation::Kind("identifier") => AnchorRule {
                 parsers: vec![Box::new(|lexer: &mut LazyStatefulLexer<'_>| {
                     let snapshot = lexer.snapshot();
+                    let before_text = lexer.input_before_cursor(snapshot.input_cursor);
+                    if has_member_call_prefix(before_text, before_text.len()) {
+                        lexer.restore(&snapshot);
+                        return Err(ParserError::Custom("member call expression is not a declaration".to_string()));
+                    }
                     let result = parse_function_from_text(&{
                         let mut tokens = Vec::new();
                         loop {
@@ -658,13 +822,32 @@ pub fn parse(input: &str) -> Result<Module, ParserError> {
 
 #[cfg(test)]
 mod tests {
-    use super::parse;
+    use super::{Type, parse};
 
     #[test]
     fn parses_named_function_definition() {
         let module = parse("int add(int x, int y) { return x + y; }").unwrap();
         assert_eq!(module.functions.len(), 1);
         assert_eq!(module.functions[0].name, "add");
+    }
+
+    #[test]
+    fn does_not_parse_cpp_body_expressions_as_top_level_functions() {
+        let module = parse(
+            r#"
+            inline std::string trim_whitespace(const std::string& str) {
+                const auto begin = str.find_first_not_of(" \t\r\n");
+                if (begin == std::string::npos) {
+                    return "";
+                }
+                const auto end = str.find_last_not_of(" \t\r\n");
+                return str.substr(begin, end - begin + 1);
+            }
+            "#,
+        )
+        .unwrap();
+        assert_eq!(module.functions.len(), 1);
+        assert_eq!(module.functions[0].name, "trim_whitespace");
     }
 
     #[test]
@@ -702,6 +885,21 @@ mod tests {
     }
 
     #[test]
+    fn parse_type_name_strips_generic_suffix_from_composite_names() {
+        let parsed = super::parse_type_name("LinkedListNode<T>*");
+        match parsed {
+            Type::Pointer(inner) => {
+                let Type::Composite(path) = *inner else {
+                    panic!("expected pointer to generic composite type");
+                };
+                assert_eq!(path.name, "LinkedListNode");
+                assert_eq!(path.type_arguments.len(), 1);
+            }
+            _ => panic!("expected pointer to generic composite type"),
+        }
+    }
+
+    #[test]
     fn parses_cpp_reference_library_shape() {
         let input = r#"
             #include <stdexcept>
@@ -731,5 +929,38 @@ mod tests {
         let module = parse(input).unwrap();
         assert_eq!(module.functions.len(), 2);
         assert_eq!(module.types.len(), 1);
+    }
+
+    #[test]
+    fn parses_constructor_initializer_lists_without_corrupting_member_signatures() {
+        let module = parse(
+            r#"
+            template <typename T>
+            struct Point {
+                T x;
+                T y;
+
+                Point(T x_value, T y_value) : x(x_value), y(y_value) {}
+
+                double distance_to_origin() const {
+                    return x + y;
+                }
+            };
+            "#,
+        )
+        .unwrap();
+
+        let point = &module.types[0];
+        assert!(point.default_constructor.is_some());
+        assert_eq!(point.methods.len(), 1);
+        assert_eq!(point.methods[0].name, "distance_to_origin");
+    }
+
+    #[test]
+    fn parses_real_cpp_library_fixture() {
+        let input = include_str!("../../../cpp_in/index.hpp");
+        let module = parse(input).unwrap();
+        assert_eq!(module.types.len(), 4);
+        assert_eq!(module.types.iter().map(|t| t.name.as_str()).collect::<Vec<_>>(), vec!["Point", "LinkedListNode", "LinkedList", "HashMap"]);
     }
 }

@@ -80,8 +80,9 @@ fn render_function_stub(_engine: &TemplateEngine, function: &FunctionDefinition)
     out.push_str(") {\n");
 
     for parameter in &function.callable.positional_parameters {
+        let local_name = parameter_name_binding(&parameter.name);
         out.push_str("    const ptip_ffi::Parameter ");
-        out.push_str(&parameter.name);
+        out.push_str(&local_name);
         out.push_str(" = ");
         out.push_str(&render_parameter_value_cpp(&parameter.r#type, &parameter.name));
         out.push_str(";\n");
@@ -94,7 +95,7 @@ fn render_function_stub(_engine: &TemplateEngine, function: &FunctionDefinition)
     out.push_str("\") + \"\\n\" + return_sink");
     for parameter in &function.callable.positional_parameters {
         out.push_str(" + \"\\n\" + ptip_ffi::encode_parameter_line(");
-        out.push_str(&parameter.name);
+        out.push_str(&parameter_name_binding(&parameter.name));
         out.push_str(")");
     }
     out.push_str(");\n");
@@ -102,8 +103,8 @@ fn render_function_stub(_engine: &TemplateEngine, function: &FunctionDefinition)
     out.push_str("    if (response.empty()) {\n        throw std::runtime_error(\"No response received from the bridge\");\n    }\n");
     out.push_str("    const auto lines = ptip_ffi::split_message_lines(response);\n");
     out.push_str("    if (lines.size() < 3 || lines[0] != \"S\" || lines[1] != return_sink) {\n        if (lines.size() >= 2 && lines[0] == \"E\") {\n            throw std::runtime_error(\"FFI call failed\");\n        }\n        throw std::runtime_error(\"Unexpected bridge response\");\n    }\n");
-    out.push_str("    const auto value = ptip_ffi::decode_parameter_line(lines[2]);\n");
-    out.push_str(&render_bridge_return_statement(&function.callable.return_type));
+    out.push_str("    const auto decoded_value = ptip_ffi::decode_parameter_line(lines[2]);\n");
+    out.push_str(&render_bridge_return_statement(&function.callable.return_type, "decoded_value"));
     out.push_str("\n}");
     out
 }
@@ -175,6 +176,18 @@ fn render_type_stub(engine: &TemplateEngine, definition: &TypeDefinition) -> Str
     }
 }
 
+fn parameter_name_binding(name: &str) -> String {
+    let reserved = [
+        "value", "key", "index", "str", "point", "response", "lines", "bridge", "return_sink",
+        "decoded_value",
+    ];
+    if reserved.contains(&name) {
+        format!("{name}_param")
+    } else {
+        name.to_string()
+    }
+}
+
 fn render_method_stub(_engine: &TemplateEngine, method: &Method) -> String {
     let parameters = render_parameters(&method.callable.positional_parameters);
 
@@ -194,8 +207,9 @@ fn render_method_stub(_engine: &TemplateEngine, method: &Method) -> String {
     out.push_str(" {\n");
 
     for parameter in &method.callable.positional_parameters {
+        let local_name = parameter_name_binding(&parameter.name);
         out.push_str("    const ptip_ffi::Parameter ");
-        out.push_str(&parameter.name);
+        out.push_str(&local_name);
         out.push_str(" = ");
         out.push_str(&render_parameter_value_cpp(&parameter.r#type, &parameter.name));
         out.push_str(";\n");
@@ -208,7 +222,7 @@ fn render_method_stub(_engine: &TemplateEngine, method: &Method) -> String {
     out.push_str("\") + \"\\n\" + return_sink");
     for parameter in &method.callable.positional_parameters {
         out.push_str(" + \"\\n\" + ptip_ffi::encode_parameter_line(");
-        out.push_str(&parameter.name);
+        out.push_str(&parameter_name_binding(&parameter.name));
         out.push_str(")");
     }
     out.push_str(");\n");
@@ -216,8 +230,8 @@ fn render_method_stub(_engine: &TemplateEngine, method: &Method) -> String {
     out.push_str("    if (response.empty()) {\n        throw std::runtime_error(\"No response received from the bridge\");\n    }\n");
     out.push_str("    const auto lines = ptip_ffi::split_message_lines(response);\n");
     out.push_str("    if (lines.size() < 3 || lines[0] != \"S\" || lines[1] != return_sink) {\n        if (lines.size() >= 2 && lines[0] == \"E\") {\n            throw std::runtime_error(\"FFI call failed\");\n        }\n        throw std::runtime_error(\"Unexpected bridge response\");\n    }\n");
-    out.push_str("    const auto value = ptip_ffi::decode_parameter_line(lines[2]);\n");
-    out.push_str(&render_bridge_return_statement(&method.callable.return_type));
+    out.push_str("    const auto decoded_value = ptip_ffi::decode_parameter_line(lines[2]);\n");
+    out.push_str(&render_bridge_return_statement(&method.callable.return_type, "decoded_value"));
     out.push_str("\n}");
     out
 }
@@ -234,25 +248,48 @@ fn render_parameter_value_cpp(r#type: &Type, name: &str) -> String {
             format!("ptip_ffi::Parameter{{ptip_ffi::ParameterKind::Boolean, {} ? \"1\" : \"0\"}}", name)
         }
         Type::Composite(_) => {
-            format!("ptip_ffi::Parameter{{ptip_ffi::ParameterKind::Reference, {}.uuid}}", name)
+            format!("ptip_ffi::encode_value({})", name)
         }
+        Type::Pointer(inner) => match inner.as_ref() {
+            Type::Composite(_) => format!("ptip_ffi::encode_value(*{})", name),
+            Type::Primitive(crate::features::PrimitiveType::Number) => format!(
+                "ptip_ffi::Parameter{{ptip_ffi::ParameterKind::Float, std::to_string(*{})}}",
+                name
+            ),
+            Type::Primitive(crate::features::PrimitiveType::Boolean) => format!(
+                "ptip_ffi::Parameter{{ptip_ffi::ParameterKind::Boolean, *{} ? \"1\" : \"0\"}}",
+                name
+            ),
+            Type::Primitive(crate::features::PrimitiveType::String) => format!(
+                "ptip_ffi::Parameter{{ptip_ffi::ParameterKind::String, *{}}}",
+                name
+            ),
+            _ => format!("ptip_ffi::encode_value(*{})", name),
+        },
         Type::Array(_) | Type::Tuple(_) | Type::Dynamic => {
             format!("ptip_ffi::Parameter{{ptip_ffi::ParameterKind::String, std::string(\"\")}}")
         }
     }
 }
 
-fn render_bridge_return_statement(r#type: &Type) -> String {
+fn render_bridge_return_statement(r#type: &Type, value_name: &str) -> String {
     match r#type {
         Type::Primitive(crate::features::PrimitiveType::Number) => {
-            "    if (value.kind == ptip_ffi::ParameterKind::Float || value.kind == ptip_ffi::ParameterKind::Integer) {\n        return std::stod(value.value);\n    }\n    throw std::runtime_error(\"Unexpected return type\");".to_string()
+            format!(
+                "    if ({value_name}.kind == ptip_ffi::ParameterKind::Float || {value_name}.kind == ptip_ffi::ParameterKind::Integer) {{\n        return std::stod({value_name}.value);\n    }}\n    throw std::runtime_error(\"Unexpected return type\");"
+            )
         }
         Type::Primitive(crate::features::PrimitiveType::String) => {
-            "    if (value.kind == ptip_ffi::ParameterKind::String) {\n        return value.value;\n    }\n    throw std::runtime_error(\"Unexpected return type\");".to_string()
+            format!(
+                "    if ({value_name}.kind == ptip_ffi::ParameterKind::String) {{\n        return {value_name}.value;\n    }}\n    throw std::runtime_error(\"Unexpected return type\");"
+            )
         }
         Type::Primitive(crate::features::PrimitiveType::Boolean) => {
-            "    if (value.kind == ptip_ffi::ParameterKind::Boolean) {\n        return value.value == \"1\";\n    }\n    throw std::runtime_error(\"Unexpected return type\");".to_string()
+            format!(
+                "    if ({value_name}.kind == ptip_ffi::ParameterKind::Boolean) {{\n        return {value_name}.value == \"1\";\n    }}\n    throw std::runtime_error(\"Unexpected return type\");"
+            )
         }
+        Type::Dynamic => "".to_string(),
         Type::Composite(path) => {
             let type_name = if path.module_path.segments.is_empty() {
                 path.name.clone()
@@ -260,10 +297,13 @@ fn render_bridge_return_statement(r#type: &Type) -> String {
                 format!("{}::{}", path.module_path.format("::"), path.name)
             };
             format!(
-                "    if (value.kind == ptip_ffi::ParameterKind::Reference) {{\n        return {type_name}::__fromReference(value.value);\n    }}\n    throw std::runtime_error(\"Unexpected return type\");"
+                "    if ({value_name}.kind == ptip_ffi::ParameterKind::Reference) {{\n        return ptip_ffi::decode_value<{type_name}>({value_name});\n    }}\n    throw std::runtime_error(\"Unexpected return type\");",
+                value_name = value_name,
+                type_name = type_name,
             )
         }
-        Type::Array(_) | Type::Tuple(_) | Type::Dynamic => {
+        Type::Pointer(inner) => render_bridge_return_statement(inner, value_name),
+        Type::Array(_) | Type::Tuple(_) => {
             "    throw std::runtime_error(\"Unsupported return type\");".to_string()
         }
     }
@@ -282,6 +322,7 @@ fn render_type_name(r#type: &Type) -> String {
         Type::Primitive(crate::features::PrimitiveType::Number) => "double".to_string(),
         Type::Primitive(crate::features::PrimitiveType::String) => "std::string".to_string(),
         Type::Primitive(crate::features::PrimitiveType::Boolean) => "bool".to_string(),
+        Type::Dynamic => "void".to_string(),
         Type::Composite(path) => {
             let mut name = path.name.clone();
             if !path.type_arguments.is_empty() {
@@ -299,12 +340,12 @@ fn render_type_name(r#type: &Type) -> String {
                 name
             }
         }
+        Type::Pointer(inner) => format!("{}*", render_type_name(inner)),
         Type::Array(inner) => format!("std::vector<{}>", render_type_name(inner)),
         Type::Tuple(elements) => format!(
             "std::tuple<{}>",
             elements.iter().map(render_type_name).collect::<Vec<_>>().join(", ")
         ),
-        Type::Dynamic => "std::any".to_string(),
     }
 }
 

@@ -7,8 +7,11 @@
 #include <sstream>
 #include <stdexcept>
 #include <string>
+#include <type_traits>
 #include <utility>
 #include <vector>
+
+#include "socket.hpp"
 
 namespace ptip_ffi {
 
@@ -79,10 +82,15 @@ struct DropMessage {
 
 class Bridge {
 public:
-    explicit Bridge(class MessageSocket& socket);
+    explicit Bridge(class MessageSocket& socket) : socket_(socket) {}
 
-    std::string next_message();
-    void send_message(const std::string& payload);
+    std::string next_message() {
+        return socket_.receive();
+    }
+
+    void send_message(const std::string& payload) {
+        socket_.send(payload);
+    }
 
 private:
     class MessageSocket& socket_;
@@ -232,6 +240,58 @@ inline Parameter decode_parameter_line(const std::string& line) {
             return Parameter{ParameterKind::Reference, payload};
         default:
             throw std::invalid_argument("unknown parameter tag");
+    }
+}
+
+template <typename T>
+inline Parameter encode_value(const T& value) {
+    if constexpr (std::is_same_v<T, bool>) {
+        return Parameter{ParameterKind::Boolean, value ? "1" : "0"};
+    } else if constexpr (std::is_same_v<T, std::string>) {
+        return Parameter{ParameterKind::String, value};
+    } else if constexpr (std::is_integral_v<T>) {
+        return Parameter{ParameterKind::Integer, std::to_string(static_cast<long long>(value))};
+    } else if constexpr (std::is_floating_point_v<T>) {
+        return Parameter{ParameterKind::Float, std::to_string(static_cast<double>(value))};
+    } else if constexpr (std::is_pointer_v<T>) {
+        using pointee_t = std::remove_pointer_t<T>;
+        if constexpr (std::is_same_v<pointee_t, char>) {
+            return Parameter{ParameterKind::String, std::string(value)};
+        } else {
+            return Parameter{ParameterKind::Reference, value == nullptr ? "" : value->uuid};
+        }
+    } else {
+        return Parameter{ParameterKind::Reference, value.uuid};
+    }
+}
+
+template <typename T>
+inline T decode_value(const Parameter& parameter) {
+    if constexpr (std::is_same_v<T, bool>) {
+        if (parameter.kind != ParameterKind::Boolean) {
+            throw std::invalid_argument("boolean parameter required");
+        }
+        return parameter.value == "1" || parameter.value == "true";
+    } else if constexpr (std::is_same_v<T, std::string>) {
+        if (parameter.kind != ParameterKind::String) {
+            throw std::invalid_argument("string parameter required");
+        }
+        return parameter.value;
+    } else if constexpr (std::is_integral_v<T>) {
+        if (parameter.kind != ParameterKind::Integer && parameter.kind != ParameterKind::Float) {
+            throw std::invalid_argument("integer parameter required");
+        }
+        return static_cast<T>(std::stoll(parameter.value));
+    } else if constexpr (std::is_floating_point_v<T>) {
+        if (parameter.kind != ParameterKind::Float && parameter.kind != ParameterKind::Integer) {
+            throw std::invalid_argument("float parameter required");
+        }
+        return static_cast<T>(std::stod(parameter.value));
+    } else {
+        if (parameter.kind != ParameterKind::Reference) {
+            throw std::invalid_argument("reference parameter required");
+        }
+        return T::__fromReference(parameter.value);
     }
 }
 

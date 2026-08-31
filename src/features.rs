@@ -62,6 +62,7 @@ impl TypePath {
 pub enum Type {
     Primitive(PrimitiveType),
     Composite(TypePath),
+    Pointer(Box<Type>),
     Array(Box<Type>),
     Tuple(Vec<Type>),
     Dynamic,
