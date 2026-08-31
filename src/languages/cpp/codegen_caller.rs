@@ -56,11 +56,11 @@ fn render_caller_stubs(engine: &TemplateEngine, modules: &[&Module]) -> String {
 
 fn render_module_stubs(engine: &TemplateEngine, module: &Module) -> String {
     let mut out = Vec::new();
-    for function in &module.functions {
-        out.push(render_function_stub(engine, function));
-    }
     for definition in &module.types {
         out.push(render_type_stub(engine, definition));
+    }
+    for function in &module.functions {
+        out.push(render_function_stub(engine, function));
     }
     out.join("\n\n")
 }

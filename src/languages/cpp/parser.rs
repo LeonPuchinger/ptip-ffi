@@ -300,8 +300,7 @@ fn parse_function_from_text(signature: &str) -> Result<FunctionDefinition, Parse
     if name.is_empty() || return_type.is_empty() {
         return Err(ParserError::Custom(format!("Malformed function signature: {signature}")));
     }
-    let type_parameters = parse_type_parameters(&signature[..open]);
-    let callable = parse_callable(signature, type_parameters);
+    let callable = parse_callable(signature, Vec::new());
     Ok(FunctionDefinition {
         name: name.to_string(),
         callable,

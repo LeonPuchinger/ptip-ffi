@@ -40,16 +40,21 @@ pub fn generate_callee(modules: Vec<&Module>) -> Vec<CodegenOutput> {
 }
 
 fn render_declarations(modules: &[&Module]) -> String {
-    modules
-        .iter()
-        .flat_map(|module| {
-            module
-                .functions
-                .iter()
-                .map(|function| format!("void dispatch_{}();", function.name))
-        })
-        .collect::<Vec<_>>()
-        .join("\n")
+    let mut declarations = Vec::new();
+    for module in modules {
+        for function in &module.functions {
+            declarations.push(format!("void dispatch_{}();", function.name));
+        }
+        for definition in &module.types {
+            for method in &definition.methods {
+                declarations.push(format!("void dispatch_{}_{}();", definition.name, method.name));
+            }
+            for method in &definition.static_methods {
+                declarations.push(format!("void dispatch_{}_{}();", definition.name, method.name));
+            }
+        }
+    }
+    declarations.join("\n")
 }
 
 #[cfg(test)]
