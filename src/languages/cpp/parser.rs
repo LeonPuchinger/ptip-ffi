@@ -190,14 +190,17 @@ fn parse_type_name(type_name: &str) -> Type {
         "std::string" | "string" => Type::Primitive(PrimitiveType::String),
         "void" => Type::Dynamic,
         _ => {
-            let type_arguments = if let Some(open) = cleaned.find('<')
-                && let Some(close) = cleaned.rfind('>')
+            let type_arguments = if let (Some(open), Some(close)) = (cleaned.find('<'), cleaned.rfind('>'))
             {
-                let inner = &cleaned[open + 1..close];
-                split_top_level_commas(inner)
-                    .into_iter()
-                    .map(parse_type_name)
-                    .collect::<Vec<_>>()
+                if open < close {
+                    let inner = &cleaned[open + 1..close];
+                    split_top_level_commas(inner)
+                        .into_iter()
+                        .map(parse_type_name)
+                        .collect::<Vec<_>>()
+                } else {
+                    Vec::new()
+                }
             } else {
                 Vec::new()
             };
@@ -524,6 +527,12 @@ static STATEMENTS: &[LexerRule] = &[
         modification: StateModification::None,
     },
     LexerRule {
+        pattern: r"#[^\n]*",
+        kind: "preprocessor",
+        keep: false,
+        modification: StateModification::None,
+    },
+    LexerRule {
         pattern: r"\b(template|struct|class|public|private|protected|typename|class|const|volatile)\b",
         kind: "keyword",
         keep: true,
@@ -690,5 +699,37 @@ mod tests {
         assert_eq!(module.types.len(), 1);
         assert_eq!(module.types[0].name, "Box");
         assert_eq!(module.types[0].type_parameters.len(), 1);
+    }
+
+    #[test]
+    fn parses_cpp_reference_library_shape() {
+        let input = r#"
+            #include <stdexcept>
+            #include <string>
+
+            inline std::string trim_whitespace(const std::string& str) {
+                return str;
+            }
+
+            template <typename T>
+            struct Point {
+                T x;
+                T y;
+
+                Point(T x_value, T y_value) : x(x_value), y(y_value) {}
+
+                double distance_to_origin() const {
+                    return 0.0;
+                }
+            };
+
+            template <typename T>
+            double takes_point(const Point<T>& point) {
+                return 0.0;
+            }
+        "#;
+        let module = parse(input).unwrap();
+        assert_eq!(module.functions.len(), 2);
+        assert_eq!(module.types.len(), 1);
     }
 }
