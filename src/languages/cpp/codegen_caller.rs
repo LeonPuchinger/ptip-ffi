@@ -177,6 +177,10 @@ fn render_type_stub(engine: &TemplateEngine, definition: &TypeDefinition) -> Str
         members.push(render_method_stub(engine, method));
     }
     members.push(format!(
+        "~{}() {{\n    if (!this->uuid.empty()) {{\n        auto& bridge = ptip_ffi::establishBridge();\n        bridge.send_message(\"D\\n\" + this->uuid);\n    }}\n}}",
+        definition.name
+    ));
+    members.push(format!(
         "static {} __fromReference(const std::string& value) {{\n    {} instance;\n    instance.uuid = value;\n    return instance;\n}}",
         definition.name,
         definition.name
@@ -482,5 +486,32 @@ mod tests {
         assert!(index.content.contains("struct Point"));
         assert!(index.content.contains("double distance() const"));
         assert!(main.content.contains("establishBridge"));
+    }
+
+    #[test]
+    fn generate_caller_emits_drop_destructor_for_managed_types() {
+        let module = Module {
+            path: ModulePath::empty(),
+            functions: Vec::new(),
+            types: vec![TypeDefinition {
+                name: "Point".to_string(),
+                properties: vec![],
+                default_constructor: None,
+                named_constructors: Vec::new(),
+                methods: Vec::new(),
+                static_methods: Vec::new(),
+                type_parameters: Vec::new(),
+                implements: Vec::new(),
+            }],
+        };
+
+        let outputs = generate_caller(vec![&module]);
+        let index = outputs
+            .iter()
+            .find(|output| output.path == Path::new("index.hpp"))
+            .expect("index.hpp should be generated");
+
+        assert!(index.content.contains("~Point()"));
+        assert!(index.content.contains("bridge.send_message(\"D\\n\" + this->uuid)"));
     }
 }

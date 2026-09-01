@@ -161,7 +161,10 @@ inline std::string dispatch_message(const std::string& message) {
 
     if (kind == "D") {
         if (lines.size() >= 2) {
-            instance_registry().erase(lines[1]);
+            const std::string dropped_reference = lines[1];
+            if (instance_registry().contains(dropped_reference)) {
+                instance_registry().erase(dropped_reference);
+            }
         }
         return "";
     }
