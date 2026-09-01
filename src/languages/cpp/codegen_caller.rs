@@ -2,13 +2,22 @@ use std::path::PathBuf;
 
 use crate::{
     codegen::{CodegenOutput, template::TemplateEngine},
-    features::{FunctionDefinition, Method, Module, Type, TypeDefinition, TypeParameter, ValueParameter},
+    features::{
+        FunctionDefinition, Method, Module, Type, TypeDefinition, TypeParameter, ValueParameter,
+    },
 };
 
 const CALLER_BRIDGE: &str = include_str!("./assets/bridge.hpp");
 const CALLER_SOCKET: &str = include_str!("./assets/socket.hpp");
 const CALLER_MAIN: &str = include_str!("./assets/caller_main.hpp");
 const CALLER_STUB: &str = include_str!("./assets/caller_stub.hpp");
+const CALLER_FUNCTION_STUB: &str = include_str!("./assets/caller/function_stub.hpp");
+const CALLER_TYPE_STUB: &str = include_str!("./assets/caller/type_stub.hpp");
+const CALLER_METHOD_STUB: &str = include_str!("./assets/caller/method_stub.hpp");
+const CALLER_CONSTRUCTOR_STUB: &str = include_str!("./assets/caller/constructor_stub.hpp");
+const CALLER_BRIDGE_CALL_BODY: &str = include_str!("./assets/caller/bridge_call_body.hpp");
+const CALLER_ERROR_HANDLING_FUNCTION: &str = include_str!("./assets/caller/error_handling_function.hpp");
+const CALLER_ERROR_HANDLING_CONSTRUCTOR: &str = include_str!("./assets/caller/error_handling_constructor.hpp");
 
 pub fn generate_caller(modules: Vec<&Module>) -> Vec<CodegenOutput> {
     let engine = TemplateEngine::new("{{NAME}}").expect("failed to compile template placeholder");
@@ -65,107 +74,76 @@ fn render_module_stubs(engine: &TemplateEngine, module: &Module) -> String {
     out.join("\n\n")
 }
 
-fn render_function_stub(_engine: &TemplateEngine, function: &FunctionDefinition) -> String {
-    let type_parameters = render_type_parameters(&function.callable.type_parameters);
-    let return_type = render_type_name(&function.callable.return_type);
-    let parameters = render_parameters(&function.callable.positional_parameters);
+fn render_function_stub(engine: &TemplateEngine, function: &FunctionDefinition) -> String {
+    let signature = format!(
+        "{}{} {}({})",
+        render_type_parameters(&function.callable.type_parameters),
+        render_type_name(&function.callable.return_type),
+        function.name,
+        render_parameters(&function.callable.positional_parameters)
+    );
+    let body = render_bridge_call_body(
+        &function.name,
+        &function.callable.positional_parameters,
+        "C",
+        None,
+        Some(&function.callable.return_type),
+        false,
+    );
 
-    let mut out = String::new();
-    out.push_str(&type_parameters);
-    out.push_str(&return_type);
-    out.push(' ');
-    out.push_str(&function.name);
-    out.push('(');
-    out.push_str(&parameters);
-    out.push_str(") {\n");
-
-    for parameter in &function.callable.positional_parameters {
-        let local_name = parameter_name_binding(&parameter.name);
-        out.push_str("    const ptip_ffi::Parameter ");
-        out.push_str(&local_name);
-        out.push_str(" = ");
-        out.push_str(&render_parameter_value_cpp(&parameter.r#type, &parameter.name));
-        out.push_str(";\n");
-    }
-
-    out.push_str("    const std::string return_sink = ptip_ffi::generate_uuid();\n");
-    out.push_str("    auto& bridge = ptip_ffi::establishBridge();\n");
-    out.push_str("    bridge.send_message(\"C\\n\" + ptip_ffi::serialize_invocation_path(\"\", \"");
-    out.push_str(&function.name);
-    out.push_str("\") + \"\\n\" + return_sink");
-    for parameter in &function.callable.positional_parameters {
-        out.push_str(" + \"\\n\" + ptip_ffi::encode_parameter_line(");
-        out.push_str(&parameter_name_binding(&parameter.name));
-        out.push_str(")");
-    }
-    out.push_str(");\n");
-    out.push_str("    const std::string response = bridge.next_message();\n");
-    out.push_str("    if (response.empty()) {\n        throw std::runtime_error(\"No response received from the bridge\");\n    }\n");
-    out.push_str("    const auto lines = ptip_ffi::split_message_lines(response);\n");
-    out.push_str("    if (lines.size() < 3 || lines[0] != \"S\" || lines[1] != return_sink) {\n        if (lines.size() >= 2 && lines[0] == \"E\") {\n            throw std::runtime_error(\"FFI call failed\");\n        }\n        throw std::runtime_error(\"Unexpected bridge response\");\n    }\n");
-    out.push_str("    const auto decoded_value = ptip_ffi::decode_parameter_line(lines[2]);\n");
-    out.push_str(&render_bridge_return_statement(&function.callable.return_type, "decoded_value"));
-    out.push_str("\n}");
-    out
+    engine.render(
+        CALLER_FUNCTION_STUB,
+        &crate::map! {
+            "SIGNATURE" => signature.as_str(),
+            "BODY" => body.as_str(),
+        },
+        false,
+    )
 }
 
 fn render_type_stub(engine: &TemplateEngine, definition: &TypeDefinition) -> String {
-    let type_parameters = render_type_parameters(&definition.type_parameters);
     let mut members = Vec::new();
     members.push("std::string uuid;".to_string());
+
     if let Some(constructor) = &definition.default_constructor {
-        let mut ctor = String::new();
-        ctor.push_str(&definition.name);
-        ctor.push('(');
-        ctor.push_str(&render_parameters(&constructor.positional_parameters));
-        ctor.push_str(") {\n");
-        ctor.push_str("    const std::string return_sink = ptip_ffi::generate_uuid();\n");
-        ctor.push_str("    auto& bridge = ptip_ffi::establishBridge();\n");
-        ctor.push_str("    bridge.send_message(\"C\\n\" + ptip_ffi::serialize_invocation_path(\"\", \"");
-        ctor.push_str(&definition.name);
-        ctor.push_str("\") + \"\\n\" + return_sink");
-        for parameter in &constructor.positional_parameters {
-            ctor.push_str(" + \"\\n\" + ptip_ffi::encode_parameter_line(");
-            ctor.push_str(&render_parameter_value_cpp(&parameter.r#type, &parameter.name));
-            ctor.push_str(")");
-        }
-        ctor.push_str(");\n");
-        ctor.push_str("    const std::string response = bridge.next_message();\n");
-        ctor.push_str("    if (response.empty()) {\n        throw std::runtime_error(\"No response received from the bridge\");\n    }\n");
-        ctor.push_str("    const auto lines = ptip_ffi::split_message_lines(response);\n");
-        ctor.push_str("    if (lines.size() < 3 || lines[0] != \"S\" || lines[1] != return_sink) {\n        throw std::runtime_error(\"Unexpected bridge response\");\n    }\n");
-        ctor.push_str("    const auto value = ptip_ffi::decode_parameter_line(lines[2]);\n");
-        ctor.push_str("    if (value.kind != ptip_ffi::ParameterKind::Reference) {\n        throw std::runtime_error(\"Constructor did not return a reference\");\n    }\n");
-        ctor.push_str("    this->uuid = value.value;\n");
-        ctor.push_str("  }");
-        members.push(ctor);
+        let signature = format!("{}({})", definition.name, render_parameters(&constructor.positional_parameters));
+        let body = render_bridge_call_body(
+            &definition.name,
+            &constructor.positional_parameters,
+            "C",
+            None,
+            None,
+            true,
+        );
+        members.push(engine.render(
+            CALLER_CONSTRUCTOR_STUB,
+            &crate::map! {
+                "SIGNATURE" => signature.as_str(),
+                "BODY" => body.as_str(),
+            },
+            false,
+        ));
     } else {
-        let mut ctor = String::new();
-        ctor.push_str(&definition.name);
-        ctor.push_str("() {\n");
-        ctor.push_str("    const std::string return_sink = ptip_ffi::generate_uuid();\n");
-        ctor.push_str("    auto& bridge = ptip_ffi::establishBridge();\n");
-        ctor.push_str("    bridge.send_message(\"C\\n\" + ptip_ffi::serialize_invocation_path(\"\", \"");
-        ctor.push_str(&definition.name);
-        ctor.push_str("\") + \"\\n\" + return_sink);\n");
-        ctor.push_str("    const std::string response = bridge.next_message();\n");
-        ctor.push_str("    if (response.empty()) {\n        throw std::runtime_error(\"No response received from the bridge\");\n    }\n");
-        ctor.push_str("    const auto lines = ptip_ffi::split_message_lines(response);\n");
-        ctor.push_str("    if (lines.size() < 3 || lines[0] != \"S\" || lines[1] != return_sink) {\n        throw std::runtime_error(\"Unexpected bridge response\");\n    }\n");
-        ctor.push_str("    const auto value = ptip_ffi::decode_parameter_line(lines[2]);\n");
-        ctor.push_str("    if (value.kind != ptip_ffi::ParameterKind::Reference) {\n        throw std::runtime_error(\"Default constructor did not return a reference\");\n    }\n");
-        ctor.push_str("    this->uuid = value.value;\n");
-        ctor.push_str("  }");
-        members.push(ctor);
+        let signature = format!("{}()", definition.name);
+        let body = render_bridge_call_body(&definition.name, &[], "C", None, None, true);
+        members.push(engine.render(
+            CALLER_CONSTRUCTOR_STUB,
+            &crate::map! {
+                "SIGNATURE" => signature.as_str(),
+                "BODY" => body.as_str(),
+            },
+            false,
+        ));
     }
+
     for constructor in &definition.named_constructors {
-        members.push(format!(
-            "static {} {}({}) {{ return {}; }}",
+        let signature = format!(
+            "static {} {}({})",
             render_type_name(&constructor.callable.return_type),
             constructor.name,
-            render_parameters(&constructor.callable.positional_parameters),
-            constructor.name
-        ));
+            render_parameters(&constructor.callable.positional_parameters)
+        );
+        members.push(format!("{signature} {{ return {}; }}", constructor.name));
     }
     for property in &definition.properties {
         members.push(format!("{} {};", render_type_name(&property.1), property.0));
@@ -186,76 +164,136 @@ fn render_type_stub(engine: &TemplateEngine, definition: &TypeDefinition) -> Str
         definition.name
     ));
 
-    if members.is_empty() {
-        format!("{}struct {} {{}};", type_parameters, definition.name)
-    } else {
-        format!(
-            "{}struct {} {{\n  {}\n}};",
-            type_parameters,
-            definition.name,
-            members.join("\n  ")
-        )
+    let type_parameters = render_type_parameters(&definition.type_parameters);
+    let members_block = members.join("\n  ");
+    engine.render(
+        CALLER_TYPE_STUB,
+        &crate::map! {
+            "TYPE_PARAMETERS" => type_parameters.as_str(),
+            "NAME" => definition.name.as_str(),
+            "MEMBERS" => members_block.as_str(),
+        },
+        false,
+    )
+}
+
+fn render_method_stub(engine: &TemplateEngine, method: &Method) -> String {
+    let mut signature = String::new();
+    if method.r#static {
+        signature.push_str("static ");
     }
+    signature.push_str(&render_type_name(&method.callable.return_type));
+    signature.push(' ');
+    signature.push_str(&method.name);
+    signature.push('(');
+    signature.push_str(&render_parameters(&method.callable.positional_parameters));
+    signature.push(')');
+    if !method.r#static {
+        signature.push_str(" const");
+    }
+
+    let body = render_bridge_call_body(
+        &method.name,
+        &method.callable.positional_parameters,
+        "M",
+        if method.r#static { None } else { Some("this->uuid") },
+        Some(&method.callable.return_type),
+        false,
+    );
+
+    engine.render(
+        CALLER_METHOD_STUB,
+        &crate::map! {
+            "SIGNATURE" => signature.as_str(),
+            "BODY" => body.as_str(),
+        },
+        false,
+    )
+}
+
+fn render_bridge_call_body(
+    target_name: &str,
+    parameters: &[ValueParameter],
+    message_kind: &str,
+    receiver: Option<&str>,
+    return_type: Option<&Type>,
+    is_constructor: bool,
+) -> String {
+    let engine = TemplateEngine::new("{{PLACEHOLDER}}").expect("failed to compile template placeholder");
+
+    let bindings = parameters
+        .iter()
+        .map(|parameter| {
+            let local_name = parameter_name_binding(&parameter.name);
+            format!(
+                "const ptip_ffi::Parameter {local_name} = {};",
+                render_parameter_value_cpp(&parameter.r#type, &parameter.name)
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n    ");
+
+    let receiver_prefix = receiver.map_or_else(
+        || {
+            format!(
+                "C\\n\" + ptip_ffi::serialize_invocation_path(\"\", \"{target_name}\") + \"\\n\" + return_sink",
+                target_name = target_name,
+            )
+        },
+        |receiver_name| {
+            format!(
+                "{message_kind}\\n\" + {receiver_name} + \"\\n\" + ptip_ffi::encode_base64_no_pad_utf8(\"{target_name}\") + \"\\n\" + return_sink",
+                message_kind = message_kind,
+                receiver_name = receiver_name,
+                target_name = target_name,
+            )
+        },
+    );
+    let send_message = format!(
+        "bridge.send_message(\"{}{});",
+        receiver_prefix,
+        parameters
+            .iter()
+            .map(|parameter| {
+                let local_name = parameter_name_binding(&parameter.name);
+                format!(" + \"\\n\" + ptip_ffi::encode_parameter_line({local_name})")
+            })
+            .collect::<Vec<_>>()
+            .join("")
+    );
+
+    let error_handling = if is_constructor {
+        CALLER_ERROR_HANDLING_CONSTRUCTOR.to_string()
+    } else {
+        CALLER_ERROR_HANDLING_FUNCTION.to_string()
+    };
+
+    let return_statement = if is_constructor {
+        String::new()
+    } else {
+        let decoded_value_line = "const auto decoded_value = ptip_ffi::decode_parameter_line(lines[2]);";
+        let return_stmt = render_bridge_return_statement(
+            return_type.expect("non-constructor call should provide a return type"),
+            "decoded_value",
+        );
+        format!("{decoded_value_line}\n{return_stmt}")
+    };
+
+    engine.render(
+        CALLER_BRIDGE_CALL_BODY,
+        &crate::map! {
+            "PARAMETER_BINDINGS" => bindings.as_str(),
+            "SEND_MESSAGE" => send_message.as_str(),
+            "ERROR_HANDLING" => error_handling.as_str(),
+            "RETURN_STATEMENT" => return_statement.as_str(),
+        },
+        true,
+    )
 }
 
 fn parameter_name_binding(name: &str) -> String {
-    let reserved = [
-        "value", "key", "index", "str", "point", "response", "lines", "bridge", "return_sink",
-        "decoded_value",
-    ];
-    if reserved.contains(&name) {
-        format!("{name}_param")
-    } else {
-        name.to_string()
-    }
-}
-
-fn render_method_stub(_engine: &TemplateEngine, method: &Method) -> String {
-    let parameters = render_parameters(&method.callable.positional_parameters);
-
-    let mut out = String::new();
-    if method.r#static {
-        out.push_str("static ");
-    }
-    out.push_str(&render_type_name(&method.callable.return_type));
-    out.push(' ');
-    out.push_str(&method.name);
-    out.push('(');
-    out.push_str(&parameters);
-    out.push_str(")");
-    if !method.r#static {
-        out.push_str(" const");
-    }
-    out.push_str(" {\n");
-
-    for parameter in &method.callable.positional_parameters {
-        let local_name = parameter_name_binding(&parameter.name);
-        out.push_str("    const ptip_ffi::Parameter ");
-        out.push_str(&local_name);
-        out.push_str(" = ");
-        out.push_str(&render_parameter_value_cpp(&parameter.r#type, &parameter.name));
-        out.push_str(";\n");
-    }
-
-    out.push_str("    const std::string return_sink = ptip_ffi::generate_uuid();\n");
-    out.push_str("    auto& bridge = ptip_ffi::establishBridge();\n");
-    out.push_str("    bridge.send_message(\"M\\n\" + this->uuid + \"\\n\" + ptip_ffi::encode_base64_no_pad_utf8(\"");
-    out.push_str(&method.name);
-    out.push_str("\") + \"\\n\" + return_sink");
-    for parameter in &method.callable.positional_parameters {
-        out.push_str(" + \"\\n\" + ptip_ffi::encode_parameter_line(");
-        out.push_str(&parameter_name_binding(&parameter.name));
-        out.push_str(")");
-    }
-    out.push_str(");\n");
-    out.push_str("    const std::string response = bridge.next_message();\n");
-    out.push_str("    if (response.empty()) {\n        throw std::runtime_error(\"No response received from the bridge\");\n    }\n");
-    out.push_str("    const auto lines = ptip_ffi::split_message_lines(response);\n");
-    out.push_str("    if (lines.size() < 3 || lines[0] != \"S\" || lines[1] != return_sink) {\n        if (lines.size() >= 2 && lines[0] == \"E\") {\n            throw std::runtime_error(\"FFI call failed\");\n        }\n        throw std::runtime_error(\"Unexpected bridge response\");\n    }\n");
-    out.push_str("    const auto decoded_value = ptip_ffi::decode_parameter_line(lines[2]);\n");
-    out.push_str(&render_bridge_return_statement(&method.callable.return_type, "decoded_value"));
-    out.push_str("\n}");
-    out
+    // Always use a suffix to avoid shadowing the original parameter name
+    format!("{name}_encoded")
 }
 
 fn render_parameter_value_cpp(r#type: &Type, name: &str) -> String {
@@ -269,9 +307,7 @@ fn render_parameter_value_cpp(r#type: &Type, name: &str) -> String {
         Type::Primitive(crate::features::PrimitiveType::Boolean) => {
             format!("ptip_ffi::Parameter{{ptip_ffi::ParameterKind::Boolean, {} ? \"1\" : \"0\"}}", name)
         }
-        Type::Composite(_) => {
-            format!("ptip_ffi::encode_value({})", name)
-        }
+        Type::Composite(_) => format!("ptip_ffi::encode_value({})", name),
         Type::Pointer(inner) => match inner.as_ref() {
             Type::Composite(_) => format!("ptip_ffi::encode_value(*{})", name),
             Type::Primitive(crate::features::PrimitiveType::Number) => format!(
@@ -296,22 +332,16 @@ fn render_parameter_value_cpp(r#type: &Type, name: &str) -> String {
 
 fn render_bridge_return_statement(r#type: &Type, value_name: &str) -> String {
     match r#type {
-        Type::Primitive(crate::features::PrimitiveType::Number) => {
-            format!(
-                "    if ({value_name}.kind == ptip_ffi::ParameterKind::Float || {value_name}.kind == ptip_ffi::ParameterKind::Integer) {{\n        return std::stod({value_name}.value);\n    }}\n    throw std::runtime_error(\"Unexpected return type\");"
-            )
-        }
-        Type::Primitive(crate::features::PrimitiveType::String) => {
-            format!(
-                "    if ({value_name}.kind == ptip_ffi::ParameterKind::String) {{\n        return {value_name}.value;\n    }}\n    throw std::runtime_error(\"Unexpected return type\");"
-            )
-        }
-        Type::Primitive(crate::features::PrimitiveType::Boolean) => {
-            format!(
-                "    if ({value_name}.kind == ptip_ffi::ParameterKind::Boolean) {{\n        return {value_name}.value == \"1\";\n    }}\n    throw std::runtime_error(\"Unexpected return type\");"
-            )
-        }
-        Type::Dynamic => "".to_string(),
+        Type::Primitive(crate::features::PrimitiveType::Number) => format!(
+            "    if ({value_name}.kind == ptip_ffi::ParameterKind::Float || {value_name}.kind == ptip_ffi::ParameterKind::Integer) {{\n        return std::stod({value_name}.value);\n    }}\n    throw std::runtime_error(\"Unexpected return type\");"
+        ),
+        Type::Primitive(crate::features::PrimitiveType::String) => format!(
+            "    if ({value_name}.kind == ptip_ffi::ParameterKind::String) {{\n        return {value_name}.value;\n    }}\n    throw std::runtime_error(\"Unexpected return type\");"
+        ),
+        Type::Primitive(crate::features::PrimitiveType::Boolean) => format!(
+            "    if ({value_name}.kind == ptip_ffi::ParameterKind::Boolean) {{\n        return {value_name}.value == \"1\";\n    }}\n    throw std::runtime_error(\"Unexpected return type\");"
+        ),
+        Type::Dynamic => String::new(),
         Type::Composite(path) => {
             let type_name = if path.module_path.segments.is_empty() {
                 path.name.clone()
@@ -323,11 +353,7 @@ fn render_bridge_return_statement(r#type: &Type, value_name: &str) -> String {
                 && path.name.len() == 1
                 && path.name.chars().next().is_some_and(|ch| ch.is_ascii_uppercase());
             if is_template_parameter {
-                format!(
-                    "    return ptip_ffi::decode_value<{type_name}>({value_name});",
-                    value_name = value_name,
-                    type_name = type_name,
-                )
+                format!("    return ptip_ffi::decode_value<{type_name}>({value_name});", value_name = value_name, type_name = type_name)
             } else {
                 format!(
                     "    if ({value_name}.kind == ptip_ffi::ParameterKind::Reference) {{\n        return ptip_ffi::decode_value<{type_name}>({value_name});\n    }}\n    throw std::runtime_error(\"Unexpected return type\");",
@@ -337,9 +363,7 @@ fn render_bridge_return_statement(r#type: &Type, value_name: &str) -> String {
             }
         }
         Type::Pointer(inner) => render_bridge_return_statement(inner, value_name),
-        Type::Array(_) | Type::Tuple(_) => {
-            "    throw std::runtime_error(\"Unsupported return type\");".to_string()
-        }
+        Type::Array(_) | Type::Tuple(_) => "    throw std::runtime_error(\"Unsupported return type\");".to_string(),
     }
 }
 
