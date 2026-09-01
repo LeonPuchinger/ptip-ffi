@@ -71,4 +71,4 @@ inline Bridge& establishBridge() {
     return establish_bridge();
 }
 
-}  // namespace ptip_ffi
+}

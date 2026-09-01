@@ -351,4 +351,4 @@ inline std::string serialize_invocation_path(const std::string& module_path, con
     return encoded_module_path + "." + encode_base64_no_pad_utf8(callee_name);
 }
 
-}  // namespace ptip_ffi
+}

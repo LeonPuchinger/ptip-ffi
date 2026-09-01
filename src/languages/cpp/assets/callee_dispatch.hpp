@@ -171,4 +171,4 @@ inline std::string dispatch_message(const std::string& message) {
 
 {{DECLARATIONS}}
 
-}  // namespace ptip_ffi_generated
+}

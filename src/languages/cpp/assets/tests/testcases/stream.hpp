@@ -87,4 +87,4 @@ private:
     std::shared_ptr<SharedMemoryState> peer_;
 };
 
-}  // namespace ptip_ffi::tests
+}

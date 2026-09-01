@@ -40,4 +40,4 @@ inline int run_library_server() {
     return 0;
 }
 
-}  // namespace ptip_ffi
+}
