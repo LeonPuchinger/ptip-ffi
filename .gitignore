@@ -13,5 +13,5 @@
 
 out/
 in/
-*_out/
-*_in/
+out_*/
+in_*/
