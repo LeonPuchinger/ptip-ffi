@@ -221,6 +221,10 @@ const RESERVED_RULESET_PREFIX: &str = "__BRANCHED_LIST_";
 const BRANCH_KEY_POP: &str = "__BRANCHED_LIST_POP__";
 
 impl<'input> LazyStatefulLexer<'input> {
+    pub fn input_before_cursor(&self, cursor: usize) -> &str {
+        &self.input[..cursor.min(self.input.len())]
+    }
+
     pub fn new(
         input: &'input str,
         rulesets: HashMap<&'static str, LexerRuleset>,

@@ -175,6 +175,7 @@ fn render_type_annotation(r#type: &Type, current_module: &ModulePath) -> String 
         Type::Primitive(PrimitiveType::String) => "string".to_string(),
         Type::Primitive(PrimitiveType::Boolean) => "boolean".to_string(),
         Type::Composite(path) => render_type_path_annotation(path),
+        Type::Pointer(inner) => render_type_annotation(inner, current_module),
         Type::Array(inner) => format!("{}[]", render_type_annotation(inner, current_module)),
         Type::Tuple(elements) => format!(
             "[{}]",
@@ -519,7 +520,8 @@ fn render_parameter_value_expression(
         Type::Primitive(PrimitiveType::Number)
         | Type::Primitive(PrimitiveType::String)
         | Type::Primitive(PrimitiveType::Boolean)
-        | Type::Composite(_) => {
+        | Type::Composite(_)
+        | Type::Pointer(_) => {
             format!("{name} as {}", render_type_annotation(r#type, current_module))
         }
         Type::Array(_) | Type::Tuple(_) | Type::Dynamic => {
@@ -556,7 +558,7 @@ fn render_return_body(
         Type::Primitive(PrimitiveType::Boolean) => format!(
             "                return {{ kind: \"boolean\", value: {result_name} }};",
         ),
-        Type::Composite(_) => render_reference_return_body(result_name, return_sink),
+        Type::Composite(_) | Type::Pointer(_) => render_reference_return_body(result_name, return_sink),
         Type::Array(_) | Type::Tuple(_) => format!(
             "                return {{ kind: \"string\", value: JSON.stringify({result_name}) }};",
         ),
@@ -597,7 +599,7 @@ fn render_request_body(property_type: &Type, accessor: &str) -> String {
         Type::Primitive(PrimitiveType::Boolean) => format!(
             "                return {{ kind: \"boolean\", value: {value_expression} }};",
         ),
-        Type::Composite(_) => format!(
+        Type::Composite(_) | Type::Pointer(_) => format!(
             "                const newReference = crypto.randomUUID();\n                instanceRegistry.set(newReference, {value_expression});\n                return {{ kind: \"reference\", value: newReference }};",
         ),
         Type::Array(_) | Type::Tuple(_) | Type::Dynamic => format!(

@@ -4,7 +4,14 @@ use clap::{Args, Parser, Subcommand};
 use ptip_ffi::{generate, initialize};
 
 static DEFAULT_LIBRARY_ENTRY_POINTS: LazyLock<HashMap<&'static str, &'static str>> =
-    LazyLock::new(|| HashMap::from([("typescript", "index.ts"), ("python", "index.py")]));
+    LazyLock::new(|| {
+        HashMap::from([
+            ("typescript", "index.ts"),
+            ("python", "index.py"),
+            ("cpp", "index.hpp"),
+            ("c++", "index.hpp"),
+        ])
+    });
 
 #[derive(Parser)]
 #[command(name = "ptip-ffi")]
@@ -40,6 +47,9 @@ fn default_library_entry_point(language: &str) -> Option<&'static str> {
 }
 
 fn canonical_language_name(registry: &[ptip_ffi::LanguageConfig], language: &str) -> String {
+    if language.trim().eq_ignore_ascii_case("cpp") {
+        return "C++".to_string();
+    }
     registry
         .iter()
         .find(|config| config.name.eq_ignore_ascii_case(language))

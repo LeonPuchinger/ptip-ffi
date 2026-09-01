@@ -36,6 +36,14 @@ pub fn persist_all(outputs: &[CodegenOutput], output_root: Option<&Path>) -> std
     Ok(())
 }
 
+pub fn clear_directory(path: &Path) -> std::io::Result<()> {
+    if path.exists() {
+        std::fs::remove_dir_all(path)?;
+    }
+    std::fs::create_dir_all(path)?;
+    Ok(())
+}
+
 /// Recursively copy the contents of the source directory to the destination directory.
 pub fn copy_directory(src: &Path, dst: &Path) -> std::io::Result<()> {
     if !src.is_dir() {

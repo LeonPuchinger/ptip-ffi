@@ -457,7 +457,7 @@ fn render_response_body(
         Type::Primitive(PrimitiveType::Boolean) => format!(
             "            if ({send_message_value}.kind === \"boolean\") {{\n                return {send_message_value}.value;\n            }}\n            throw new Error(\"Unexpected message kind\");\n",
         ),
-        Type::Composite(_) => format!(
+        Type::Composite(_) | Type::Pointer(_) | Type::Pointer(_) => format!(
             "            if ({send_message_value}.kind !== \"reference\") {{\n                throw new Error(\"Unexpected message kind\");\n            }}\n            return {composite_type_name}.__fromReference({send_message_value}.value) as {annotation};\n",
             composite_type_name = composite_type_name,
             annotation = render_type_annotation(return_type),
@@ -475,6 +475,7 @@ fn render_type_annotation(r#type: &Type) -> String {
         Type::Primitive(PrimitiveType::String) => "string".to_string(),
         Type::Primitive(PrimitiveType::Boolean) => "boolean".to_string(),
         Type::Composite(path) => render_type_path_annotation(path),
+        Type::Pointer(inner) => render_type_annotation(inner),
         Type::Array(inner) => format!("{}[]", render_type_annotation(inner)),
         Type::Tuple(elements) => format!(
             "[{}]",
@@ -519,7 +520,7 @@ fn render_parameter_value_expression(
         Type::Composite(path) if type_parameter_names.contains(&path.name) => format!(
             "(() => {{\n                    if (typeof {name} === \"number\") {{\n                        return {{ kind: Number.isInteger({name}) ? \"integer\" : \"float\", value: {name} }};\n                    }}\n                    if (typeof {name} === \"string\") {{\n                        return {{ kind: \"string\", value: {name} }};\n                    }}\n                    if (typeof {name} === \"boolean\") {{\n                        return {{ kind: \"boolean\", value: {name} }};\n                    }}\n                    if (Array.isArray({name})) {{\n                        return {{ kind: \"string\", value: JSON.stringify({name}) }};\n                    }}\n                    if ({name} !== null && typeof {name} === \"object\" && \"uuid\" in {name}) {{\n                        return {{ kind: \"reference\", value: ({name} as {{ uuid: string }}).uuid }};\n                    }}\n                    return {{ kind: \"string\", value: JSON.stringify({name}) }};\n                }})()"
         ),
-        Type::Composite(_) => format!(
+        Type::Composite(_) | Type::Pointer(_) => format!(
             "{{\n                    kind: \"reference\",\n                    value: {name}.uuid,\n                }}"
         ),
         Type::Array(_) | Type::Tuple(_) | Type::Dynamic => format!(
