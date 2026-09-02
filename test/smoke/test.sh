@@ -9,7 +9,7 @@ ALL_LANGUAGES=(py ts cpp)
 
 usage() {
     cat <<'EOF'
-Usage: test/smoke/smoke.sh [OPTIONS]
+Usage: test/smoke/test.sh [OPTIONS]
 
 Run the smoke-test matrix. Without filters, all caller/callee permutations run.
 
