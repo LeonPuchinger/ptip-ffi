@@ -55,6 +55,11 @@ def _result_to_parameter(result: Any, reference: str | None = None) -> Parameter
 def _is_constructor_call(callee: Any, target: Any) -> bool:
     return hasattr(callee, "name") and isinstance(target, type)
 
+def _resolve_parameter(parameter: Parameter) -> Any:
+    if parameter.kind == "reference":
+        return _INSTANCE_REGISTRY[parameter.value]
+    return parameter_to_python(parameter)
+
 def _resolve_target(callee: Any) -> Any:
     if hasattr(callee, "name"):
         return getattr(_LIBRARY, callee.name)
@@ -68,8 +73,8 @@ def _invoke_target(
     named_parameters: dict[str, Parameter],
     reference: str | None = None,
 ) -> Parameter:
-    positional = [parameter_to_python(parameter) for parameter in positional_parameters]
-    named = {name: parameter_to_python(parameter) for name, parameter in named_parameters.items()}
+    positional = [_resolve_parameter(parameter) for parameter in positional_parameters]
+    named = {name: _resolve_parameter(parameter) for name, parameter in named_parameters.items()}
     result = target(*positional, **named)
     return _result_to_parameter(result, reference)
 
