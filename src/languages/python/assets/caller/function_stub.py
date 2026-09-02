@@ -1,4 +1,4 @@
-def {{NAME}}({{SIGNATURE}}) -> Any:
+def {{NAME}}({{SIGNATURE}}) -> {{RETURN_TYPE}}:
     message = CallMessage(module_path="", callee=FunctionTarget(name="{{NAME}}"), return_sink=uuid4().hex, positional_parameters=[{{POSITIONAL_ARGUMENTS}}], named_parameters={})
     bridge = establish_bridge()
     bridge.send(message)

@@ -324,9 +324,10 @@ fn render_parameter_value_cpp(r#type: &Type, name: &str) -> String {
             ),
             _ => format!("ptip_ffi::encode_value(*{})", name),
         },
-        Type::Array(_) | Type::Tuple(_) | Type::Dynamic => {
-            format!("ptip_ffi::Parameter{{ptip_ffi::ParameterKind::String, std::string(\"\")}}")
+        Type::Array(_) | Type::Tuple(_) => {
+            "ptip_ffi::Parameter{ptip_ffi::ParameterKind::String, std::string(\"\")}".to_string()
         }
+        Type::Dynamic => "ptip_ffi::encode_any_value({})".replace("{}", name),
     }
 }
 
@@ -341,7 +342,10 @@ fn render_bridge_return_statement(r#type: &Type, value_name: &str) -> String {
         Type::Primitive(crate::features::PrimitiveType::Boolean) => format!(
             "    if ({value_name}.kind == ptip_ffi::ParameterKind::Boolean) {{\n        return {value_name}.value == \"1\";\n    }}\n    throw std::runtime_error(\"Unexpected return type\");"
         ),
-        Type::Dynamic => String::new(),
+        Type::Dynamic => format!(
+            "    return ptip_ffi::decode_any_value({value_name});",
+            value_name = value_name
+        ),
         Type::Composite(path) => {
             let type_name = if path.module_path.segments.is_empty() {
                 path.name.clone()
@@ -380,7 +384,7 @@ fn render_type_name(r#type: &Type) -> String {
         Type::Primitive(crate::features::PrimitiveType::Number) => "double".to_string(),
         Type::Primitive(crate::features::PrimitiveType::String) => "std::string".to_string(),
         Type::Primitive(crate::features::PrimitiveType::Boolean) => "bool".to_string(),
-        Type::Dynamic => "void".to_string(),
+        Type::Dynamic => "std::any".to_string(),
         Type::Composite(path) => {
             let mut name = path.name.clone();
             if !path.type_arguments.is_empty() {

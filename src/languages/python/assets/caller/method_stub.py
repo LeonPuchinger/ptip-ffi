@@ -1,4 +1,4 @@
-    def {{NAME}}(self{{SIGNATURE}}) -> Any:
+    def {{NAME}}(self{{SIGNATURE}}) -> {{RETURN_TYPE}}:
         return_sink = uuid4().hex
         message = MethodMessage(called_reference=self.uuid, method_name="{{NAME}}", return_sink=return_sink, positional_parameters=[{{POSITIONAL_ARGUMENTS}}], named_parameters={})
         bridge = establish_bridge()

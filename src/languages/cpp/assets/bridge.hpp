@@ -1,5 +1,6 @@
 #pragma once
 
+#include <any>
 #include <cctype>
 #include <cstdint>
 #include <cstdlib>
@@ -211,6 +212,12 @@ inline std::string decode_base64_no_pad_utf8(const std::string& value) {
     return out;
 }
 
+inline std::string encode_integer(long long value) {
+    std::stringstream stream;
+    stream << std::hex << value;
+    return stream.str();
+}
+
 inline std::vector<std::string> split_message_lines(const std::string& message) {
     std::vector<std::string> lines;
     std::stringstream stream(message);
@@ -245,14 +252,57 @@ inline Parameter decode_parameter_line(const std::string& line) {
     }
 }
 
+inline Parameter encode_any_value(const std::any& value) {
+    if (value.type() == typeid(bool)) {
+        return Parameter{ParameterKind::Boolean, std::any_cast<bool>(value) ? "1" : "0"};
+    }
+    if (value.type() == typeid(int)) {
+        return Parameter{ParameterKind::Integer, encode_integer(std::any_cast<int>(value))};
+    }
+    if (value.type() == typeid(long long)) {
+        return Parameter{ParameterKind::Integer, encode_integer(std::any_cast<long long>(value))};
+    }
+    if (value.type() == typeid(double)) {
+        return Parameter{ParameterKind::Float, std::to_string(std::any_cast<double>(value))};
+    }
+    if (value.type() == typeid(float)) {
+        return Parameter{ParameterKind::Float, std::to_string(std::any_cast<float>(value))};
+    }
+    if (value.type() == typeid(std::string)) {
+        return Parameter{ParameterKind::String, std::any_cast<std::string>(value)};
+    }
+    if (value.type() == typeid(const char*)) {
+        return Parameter{ParameterKind::String, std::string(std::any_cast<const char*>(value))};
+    }
+    throw std::invalid_argument("unsupported std::any value for FFI serialization");
+}
+
+inline std::any decode_any_value(const Parameter& parameter) {
+    switch (parameter.kind) {
+        case ParameterKind::Boolean:
+            return std::any(std::string(parameter.value) == "1" || std::string(parameter.value) == "true");
+        case ParameterKind::Integer:
+            return std::any(std::stoll(parameter.value));
+        case ParameterKind::Float:
+            return std::any(std::stod(parameter.value));
+        case ParameterKind::String:
+            return std::any(parameter.value);
+        case ParameterKind::Reference:
+            return std::any(std::string(parameter.value));
+    }
+    throw std::invalid_argument("unsupported parameter kind for std::any decoding");
+}
+
 template <typename T>
 inline Parameter encode_value(const T& value) {
     if constexpr (std::is_same_v<T, bool>) {
         return Parameter{ParameterKind::Boolean, value ? "1" : "0"};
     } else if constexpr (std::is_same_v<T, std::string>) {
         return Parameter{ParameterKind::String, value};
+    } else if constexpr (std::is_same_v<T, std::any>) {
+        return encode_any_value(value);
     } else if constexpr (std::is_integral_v<T>) {
-        return Parameter{ParameterKind::Integer, std::to_string(static_cast<long long>(value))};
+        return Parameter{ParameterKind::Integer, encode_integer(static_cast<long long>(value))};
     } else if constexpr (std::is_floating_point_v<T>) {
         return Parameter{ParameterKind::Float, std::to_string(static_cast<double>(value))};
     } else if constexpr (std::is_pointer_v<T>) {
@@ -283,7 +333,7 @@ inline T decode_value(const Parameter& parameter) {
         if (parameter.kind != ParameterKind::Integer && parameter.kind != ParameterKind::Float) {
             throw std::invalid_argument("integer parameter required");
         }
-        return static_cast<T>(std::stoll(parameter.value));
+        return static_cast<T>(std::stoll(parameter.value, nullptr, 16));
     } else if constexpr (std::is_floating_point_v<T>) {
         if (parameter.kind != ParameterKind::Float && parameter.kind != ParameterKind::Integer) {
             throw std::invalid_argument("float parameter required");
