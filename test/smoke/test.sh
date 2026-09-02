@@ -64,12 +64,13 @@ run_usage() {
     process_id=$!
     while kill -0 "$process_id" 2>/dev/null; do
         if grep -q "integration passed" "$log_file" 2>/dev/null; then
-            kill -TERM -- "-$process_id" 2>/dev/null || true
+            kill -KILL -- "-$process_id" 2>/dev/null || true
             wait "$process_id" 2>/dev/null || true
             cat "$log_file"
             set -e
             return 0
         fi
+        sleep 0.05
     done
     wait "$process_id"
     exit_code=$?
