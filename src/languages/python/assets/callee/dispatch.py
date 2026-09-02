@@ -35,6 +35,8 @@ def _result_to_parameter(result: Any, reference: str | None = None) -> Parameter
         return Parameter(kind="string", value="undefined")
     if isinstance(result, Parameter):
         return result
+    if reference is not None:
+        return Parameter(kind="reference", value=_store_instance_with_reference(reference, result))
     if isinstance(result, bool):
         return Parameter(kind="boolean", value=result)
     if isinstance(result, int) and not isinstance(result, bool):
@@ -47,8 +49,6 @@ def _result_to_parameter(result: Any, reference: str | None = None) -> Parameter
         instance_reference = str(getattr(result, "uuid"))
         _INSTANCE_REGISTRY[instance_reference] = result
         return Parameter(kind="reference", value=instance_reference)
-    if reference is not None:
-        return Parameter(kind="reference", value=_store_instance_with_reference(reference, result))
     return Parameter(kind="reference", value=_store_instance(result))
 
 

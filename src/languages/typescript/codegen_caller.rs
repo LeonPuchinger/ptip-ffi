@@ -524,7 +524,7 @@ fn render_parameter_value_expression(
             "{{\n                    kind: \"reference\",\n                    value: {name}.uuid,\n                }}"
         ),
         Type::Array(_) | Type::Tuple(_) | Type::Dynamic => format!(
-            "{{\n                    kind: \"string\",\n                    value: JSON.stringify({name}),\n                }}"
+            "(() => {{\n                    if (typeof {name} === \"number\") {{\n                        return {{ kind: Number.isInteger({name}) ? \"integer\" : \"float\", value: {name} }};\n                    }}\n                    if (typeof {name} === \"string\") {{\n                        return {{ kind: \"string\", value: {name} }};\n                    }}\n                    if (typeof {name} === \"boolean\") {{\n                        return {{ kind: \"boolean\", value: {name} }};\n                    }}\n                    if ({name} !== null && typeof {name} === \"object\" && \"uuid\" in {name}) {{\n                        return {{ kind: \"reference\", value: ({name} as {{ uuid: string }}).uuid }};\n                    }}\n                    return {{ kind: \"string\", value: JSON.stringify({name}) }};\n                }})()"
         ),
     }
 }
