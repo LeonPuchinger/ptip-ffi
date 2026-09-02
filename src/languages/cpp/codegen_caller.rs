@@ -184,7 +184,7 @@ fn render_method_stub(engine: &TemplateEngine, method: &Method) -> String {
     }
     signature.push_str(&render_type_name(&method.callable.return_type));
     signature.push(' ');
-    signature.push_str(&method.name);
+    signature.push_str(&render_cpp_method_name(&method.name));
     signature.push('(');
     signature.push_str(&render_parameters(&method.callable.positional_parameters));
     signature.push(')');
@@ -386,6 +386,13 @@ fn render_type_name(r#type: &Type) -> String {
         Type::Primitive(crate::features::PrimitiveType::Boolean) => "bool".to_string(),
         Type::Dynamic => "std::any".to_string(),
         Type::Composite(path) => {
+            if path.name == "Map" && path.type_arguments.len() == 2 {
+                return format!(
+                    "std::map<{}, {}>",
+                    render_type_name(&path.type_arguments[0]),
+                    render_type_name(&path.type_arguments[1])
+                );
+            }
             let mut name = path.name.clone();
             if !path.type_arguments.is_empty() {
                 let args = path
@@ -408,6 +415,13 @@ fn render_type_name(r#type: &Type) -> String {
             "std::tuple<{}>",
             elements.iter().map(render_type_name).collect::<Vec<_>>().join(", ")
         ),
+    }
+}
+
+fn render_cpp_method_name(name: &str) -> String {
+    match name {
+        "delete" => "delete_key".to_string(),
+        _ => name.to_string(),
     }
 }
 
