@@ -28,4 +28,4 @@ if (map.get("answer") !== 42 || !map.has("answer") || !map.remove("answer")) {
     throw new Error("Unexpected map result");
 }
 
-console.log("ts-cpp integration passed");
+console.log("TypeScript caller integration passed");

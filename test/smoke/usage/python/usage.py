@@ -20,4 +20,4 @@ assert map.get("answer") == 42
 assert map.has("answer")
 assert map.remove("answer")
 
-print("py-cpp integration passed")
+print("Python caller integration passed")

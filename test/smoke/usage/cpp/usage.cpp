@@ -34,6 +34,6 @@ int main() {
         throw std::runtime_error("Unexpected map result");
     }
 
-    std::cout << "cpp-cpp integration passed" << std::endl;
+    std::cout << "CPP caller integration passed" << std::endl;
     return 0;
 }
