@@ -104,6 +104,7 @@ fn render_function_stub(engine: &TemplateEngine, function: &FunctionDefinition) 
 fn render_type_stub(engine: &TemplateEngine, definition: &TypeDefinition) -> String {
     let mut members = Vec::new();
     members.push("std::string uuid;".to_string());
+    members.push(format!("struct ReferenceTag {{}};\n  {}(ReferenceTag) {{}}", definition.name));
 
     if let Some(constructor) = &definition.default_constructor {
         let signature = format!("{}({})", definition.name, render_parameters(&constructor.positional_parameters));
@@ -159,7 +160,7 @@ fn render_type_stub(engine: &TemplateEngine, definition: &TypeDefinition) -> Str
         definition.name
     ));
     members.push(format!(
-        "static {} __fromReference(const std::string& value) {{\n    {} instance;\n    instance.uuid = value;\n    return instance;\n}}",
+        "static {} __fromReference(const std::string& value) {{\n    {} instance(ReferenceTag{{}});\n    instance.uuid = value;\n    return instance;\n}}",
         definition.name,
         definition.name
     ));

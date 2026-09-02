@@ -282,7 +282,7 @@ inline std::any decode_any_value(const Parameter& parameter) {
         case ParameterKind::Boolean:
             return std::any(std::string(parameter.value) == "1" || std::string(parameter.value) == "true");
         case ParameterKind::Integer:
-            return std::any(std::stoll(parameter.value));
+            return std::any(std::stoll(parameter.value, nullptr, 16));
         case ParameterKind::Float:
             return std::any(std::stod(parameter.value));
         case ParameterKind::String:
