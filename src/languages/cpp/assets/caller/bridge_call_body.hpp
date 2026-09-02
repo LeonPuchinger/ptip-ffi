@@ -9,5 +9,4 @@
     const auto lines = ptip_ffi::split_message_lines(response);
     if (lines.size() < 3 || lines[0] != "S" || lines[1] != return_sink) {
         {{ERROR_HANDLING}}
-    }
 {{RETURN_STATEMENT}}
