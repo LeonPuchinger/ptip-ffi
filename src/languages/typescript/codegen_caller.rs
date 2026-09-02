@@ -125,15 +125,19 @@ fn render_type_stub(
     let type_parameter_names = render_type_parameter_names(&definition.type_parameters);
     let mut members = Vec::new();
     members.push("    readonly uuid: string;".to_string());
-    if let Some(constructor) = &definition.default_constructor {
-        members.push(render_constructor_stub(
-            engine,
-            module_path,
-            &definition.name,
-            &type_parameter_names,
-            constructor,
-        ));
-    }
+    let constructor = definition.default_constructor.clone().unwrap_or(AnonymousCallable {
+        positional_parameters: Vec::new(),
+        named_parameters: Vec::new(),
+        return_type: Type::Dynamic,
+        type_parameters: Vec::new(),
+    });
+    members.push(render_constructor_stub(
+        engine,
+        module_path,
+        &definition.name,
+        &type_parameter_names,
+        &constructor,
+    ));
     members.push(render_reference_factory(
         engine,
         &definition.name,
