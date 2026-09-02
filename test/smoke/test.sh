@@ -62,10 +62,17 @@ run_usage() {
     set +e
     setsid timeout --signal=TERM --kill-after=5s 60s "$@" >"$log_file" 2>&1 &
     process_id=$!
+    while kill -0 "$process_id" 2>/dev/null; do
+        if grep -q "integration passed" "$log_file" 2>/dev/null; then
+            kill -TERM -- "-$process_id" 2>/dev/null || true
+            wait "$process_id" 2>/dev/null || true
+            cat "$log_file"
+            set -e
+            return 0
+        fi
+    done
     wait "$process_id"
     exit_code=$?
-    kill -TERM -- "-$process_id" 2>/dev/null || true
-    wait "$process_id" 2>/dev/null || true
     set -e
 
     cat "$log_file"
