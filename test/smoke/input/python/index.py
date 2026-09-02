@@ -87,7 +87,7 @@ class HashMap(Generic[K, V]):
     def has(self, key: K) -> bool:
         return key in self.map
 
-    def delete(self, key: K) -> bool:
+    def remove(self, key: K) -> bool:
         if key in self.map:
             del self.map[key]
             return True

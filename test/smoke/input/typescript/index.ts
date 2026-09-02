@@ -83,7 +83,7 @@ export class HashMap<K, V> {
         return this.map.has(key);
     }
 
-    delete(key: K): boolean {
+    remove(key: K): boolean {
         return this.map.delete(key);
     }
 }

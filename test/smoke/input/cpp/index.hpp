@@ -102,7 +102,7 @@ public:
         return data.find(key) != data.end();
     }
 
-    bool delete_key(const K &key) {
+    bool remove(const K &key) {
         return data.erase(key) > 0;
     }
 
