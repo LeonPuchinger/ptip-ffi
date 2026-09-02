@@ -15,3 +15,5 @@ out/
 in/
 out_*/
 in_*/
+
+test/smoke/output/**
