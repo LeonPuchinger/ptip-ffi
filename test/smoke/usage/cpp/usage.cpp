@@ -11,7 +11,7 @@ int main() {
         throw std::runtime_error("Unexpected trimmed value");
     }
 
-    ptip_ffi_generated::Point<int> point(3, 4);
+    ptip_ffi_generated::Point point(3, 4);
     const double distance = point.distance_to_origin();
     if (std::abs(distance - 5.0) > 1e-9) {
         throw std::runtime_error("Unexpected distance");
