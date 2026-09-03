@@ -247,7 +247,35 @@ fn parse_class_methods(input: &str, module: &mut Module) -> Result<(), ParserErr
                 break;
             }
             if trimmed.starts_with("def ") {
-                let mut function = parse_method_header(trimmed)?;
+                let mut header = trimmed.to_string();
+                let mut paren_depth = 0i32;
+                let mut bracket_depth = 0i32;
+                let mut header_complete = false;
+                let mut header_line_index = line_index;
+                while header_line_index < lines.len() {
+                    for character in lines[header_line_index].chars() {
+                        match character {
+                            '(' => paren_depth += 1,
+                            ')' => paren_depth -= 1,
+                            '[' => bracket_depth += 1,
+                            ']' => bracket_depth -= 1,
+                            ':' if paren_depth == 0 && bracket_depth == 0 => {
+                                header_complete = true;
+                                break;
+                            }
+                            _ => {}
+                        }
+                    }
+                    if header_complete {
+                        break;
+                    }
+                    header_line_index += 1;
+                    if header_line_index < lines.len() {
+                        header.push(' ');
+                        header.push_str(lines[header_line_index].trim());
+                    }
+                }
+                let mut function = parse_method_header(&header)?;
                 if function
                     .callable
                     .positional_parameters
@@ -266,7 +294,22 @@ fn parse_class_methods(input: &str, module: &mut Module) -> Result<(), ParserErr
                     });
                 }
             }
-            line_index += 1;
+            line_index = if trimmed.starts_with("def ") {
+                let mut next_line = line_index + 1;
+                while next_line < lines.len() {
+                    let next_trimmed = lines[next_line].trim_start();
+                    if !next_trimmed.is_empty() && lines[next_line].len() - next_trimmed.len() <= class_indent {
+                        break;
+                    }
+                    if next_trimmed.starts_with("def ") {
+                        break;
+                    }
+                    next_line += 1;
+                }
+                next_line
+            } else {
+                line_index + 1
+            };
         }
         class_index = line_index;
     }

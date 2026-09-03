@@ -156,14 +156,27 @@ class Bridge:
 
 def serialize_invocation_path(module_path: str, callee: CallTarget) -> str:
     if isinstance(callee, FunctionTarget):
-        if module_path:
-            return f"{module_path}.{callee.name}"
-        return callee.name
+        if not module_path:
+            return encode_base64_no_pad_utf8(callee.name)
+        return f"{encode_module_path(module_path)}.{encode_base64_no_pad_utf8(callee.name)}"
     if isinstance(callee, StaticMethodTarget):
-        if module_path:
-            return f"{module_path}:{callee.type_name}#{callee.method_name}"
-        return f"{callee.type_name}#{callee.method_name}"
+        callee_suffix = f"{encode_base64_no_pad_utf8(callee.type_name)}#{encode_base64_no_pad_utf8(callee.method_name)}"
+        if not module_path:
+            return callee_suffix
+        return f"{encode_module_path(module_path)}:{callee_suffix}"
     raise TypeError(f"Unsupported callee target: {type(callee)!r}")
+
+
+def encode_module_path(module_path: str) -> str:
+    if not module_path:
+        return ""
+    return "/".join(encode_base64_no_pad_utf8(component) for component in module_path.split("/"))
+
+
+def decode_module_path(encoded_path: str) -> str:
+    if not encoded_path:
+        return ""
+    return "/".join(decode_base64_no_pad_utf8(component) for component in encoded_path.split("/"))
 
 
 def encode_parameter_line(parameter: Parameter, name: str | None = None) -> str:
@@ -295,11 +308,11 @@ def parse_invocation_path(text: str) -> tuple[str, CallTarget]:
     if ":" in text and "#" in text:
         module_path, rest = text.split(":", 1)
         type_name, method_name = rest.split("#", 1)
-        return module_path, StaticMethodTarget(type_name=type_name, method_name=method_name)
+        return decode_module_path(module_path), StaticMethodTarget(type_name=decode_base64_no_pad_utf8(type_name), method_name=decode_base64_no_pad_utf8(method_name))
     if "." in text:
         module_path, function_name = text.rsplit(".", 1)
-        return module_path, FunctionTarget(name=function_name)
+        return decode_module_path(module_path), FunctionTarget(name=decode_base64_no_pad_utf8(function_name))
     if "#" in text:
         type_name, method_name = text.split("#", 1)
-        return "", StaticMethodTarget(type_name=type_name, method_name=method_name)
-    return "", FunctionTarget(name=text)
+        return "", StaticMethodTarget(type_name=decode_base64_no_pad_utf8(type_name), method_name=decode_base64_no_pad_utf8(method_name))
+    return "", FunctionTarget(name=decode_base64_no_pad_utf8(text))

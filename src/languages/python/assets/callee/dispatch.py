@@ -35,6 +35,8 @@ def _result_to_parameter(result: Any, reference: str | None = None) -> Parameter
         return Parameter(kind="string", value="undefined")
     if isinstance(result, Parameter):
         return result
+    if reference is not None:
+        return Parameter(kind="reference", value=_store_instance_with_reference(reference, result))
     if isinstance(result, bool):
         return Parameter(kind="boolean", value=result)
     if isinstance(result, int) and not isinstance(result, bool):
@@ -47,13 +49,16 @@ def _result_to_parameter(result: Any, reference: str | None = None) -> Parameter
         instance_reference = str(getattr(result, "uuid"))
         _INSTANCE_REGISTRY[instance_reference] = result
         return Parameter(kind="reference", value=instance_reference)
-    if reference is not None:
-        return Parameter(kind="reference", value=_store_instance_with_reference(reference, result))
     return Parameter(kind="reference", value=_store_instance(result))
 
 
 def _is_constructor_call(callee: Any, target: Any) -> bool:
     return hasattr(callee, "name") and isinstance(target, type)
+
+def _resolve_parameter(parameter: Parameter) -> Any:
+    if parameter.kind == "reference":
+        return _INSTANCE_REGISTRY[parameter.value]
+    return parameter_to_python(parameter)
 
 def _resolve_target(callee: Any) -> Any:
     if hasattr(callee, "name"):
@@ -68,8 +73,8 @@ def _invoke_target(
     named_parameters: dict[str, Parameter],
     reference: str | None = None,
 ) -> Parameter:
-    positional = [parameter_to_python(parameter) for parameter in positional_parameters]
-    named = {name: parameter_to_python(parameter) for name, parameter in named_parameters.items()}
+    positional = [_resolve_parameter(parameter) for parameter in positional_parameters]
+    named = {name: _resolve_parameter(parameter) for name, parameter in named_parameters.items()}
     result = target(*positional, **named)
     return _result_to_parameter(result, reference)
 

@@ -16,6 +16,7 @@ from ffi.bridge import (
     UpdateMessage,
     parse_invocation_path,
     parse_message,
+    serialize_invocation_path,
 )
 
 
@@ -36,6 +37,14 @@ class BridgeTests(unittest.TestCase):
         module_path, callee = parse_invocation_path("pkg/util:Widget#create")
         self.assertEqual(module_path, "pkg/util")
         self.assertEqual(callee, StaticMethodTarget(type_name="Widget", method_name="create"))
+
+    def test_serialize_invocation_path_uses_bridge_protocol_encoding(self) -> None:
+        self.assertEqual(serialize_invocation_path("foo/bar", FunctionTarget(name="sum")), "Zm9v/YmFy.c3Vt")
+        self.assertEqual(serialize_invocation_path("", FunctionTarget(name="sum")), "c3Vt")
+        self.assertEqual(
+            serialize_invocation_path("pkg/util", StaticMethodTarget(type_name="Widget", method_name="create")),
+            "cGtnL3V0aWw:V2lkZ2V0I2NyZWF0ZQ",
+        )
 
     def test_call_message_roundtrip_with_positional_and_named_parameters(self) -> None:
         message = CallMessage(

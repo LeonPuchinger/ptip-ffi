@@ -68,6 +68,7 @@ fn render_function_stub(engine: &TemplateEngine, function: &FunctionDefinition) 
     let signature = render_parameters(&function.callable.positional_parameters);
     let positional_arguments = render_call_arguments(&function.callable.positional_parameters);
     let named_arguments = render_named_arguments(&function.callable.positional_parameters);
+    let return_type = render_python_type_name(&function.callable.return_type);
     engine.render(
         CALLER_FUNCTION_TEMPLATE,
         &map! {
@@ -75,6 +76,7 @@ fn render_function_stub(engine: &TemplateEngine, function: &FunctionDefinition) 
             "SIGNATURE" => signature.as_str(),
             "POSITIONAL_ARGUMENTS" => positional_arguments.as_str(),
             "NAMED_ARGUMENTS" => named_arguments.as_str(),
+            "RETURN_TYPE" => return_type.as_str(),
         },
         false,
     )
@@ -109,27 +111,54 @@ fn render_method_stub(engine: &TemplateEngine, method: &crate::features::Method)
         format!(", {signature}")
     };
     let positional_arguments = render_call_arguments(&method.callable.positional_parameters);
+    let return_type = render_python_type_name(&method.callable.return_type);
     engine.render(
         CALLER_METHOD_TEMPLATE,
         &map! {
             "NAME" => method.name.as_str(),
             "SIGNATURE" => signature.as_str(),
             "POSITIONAL_ARGUMENTS" => positional_arguments.as_str(),
+            "RETURN_TYPE" => return_type.as_str(),
         },
         false,
     )
+}
+
+fn render_python_type_name(r#type: &crate::features::Type) -> String {
+    match r#type {
+        crate::features::Type::Primitive(crate::features::PrimitiveType::Number) => "float".to_string(),
+        crate::features::Type::Primitive(crate::features::PrimitiveType::String) => "str".to_string(),
+        crate::features::Type::Primitive(crate::features::PrimitiveType::Boolean) => "bool".to_string(),
+        crate::features::Type::Dynamic => "Any".to_string(),
+        crate::features::Type::Composite(path) => {
+            let inner = if path.type_arguments.is_empty() {
+                path.name.clone()
+            } else {
+                format!("{}[{}]", path.name, path.type_arguments.iter().map(render_python_type_name).collect::<Vec<_>>().join(", "))
+            };
+            if path.module_path.segments.is_empty() {
+                inner
+            } else {
+                format!("{}.{inner}", path.module_path.format("."))
+            }
+        }
+        crate::features::Type::Pointer(inner) => render_python_type_name(inner),
+        crate::features::Type::Array(inner) => format!("list[{}]", render_python_type_name(inner)),
+        crate::features::Type::Tuple(elements) => format!("tuple[{}]", elements.iter().map(render_python_type_name).collect::<Vec<_>>().join(", ")),
+    }
 }
 
 fn render_parameters(parameters: &[ValueParameter]) -> String {
     parameters
         .iter()
         .map(|parameter| {
+            let parameter_type = render_python_type_name(&parameter.r#type);
             if parameter.variadic {
-                format!("*{}: Any", parameter.name)
+                format!("*{}: {}", parameter.name, parameter_type)
             } else if parameter.required {
-                format!("{}: Any", parameter.name)
+                format!("{}: {}", parameter.name, parameter_type)
             } else {
-                format!("{}: Any = None", parameter.name)
+                format!("{}: {} = None", parameter.name, parameter_type)
             }
         })
         .collect::<Vec<_>>()

@@ -298,10 +298,15 @@ fn parse_property_member<'input>(
     lexer: &mut LazyStatefulLexer<'input>,
 ) -> Result<(String, Type), ParserError> {
     let name = token_kind("identifier")(lexer)?;
-    let _required = optional(exact("?"))(lexer)?.is_none();
+    let required = optional(exact("?"))(lexer)?.is_none();
     exact(":")(lexer)?;
     let member_type = parse_type(lexer)?;
     let _ = optional(exact(";"))(lexer)?;
+    let member_type = if required {
+        member_type
+    } else {
+        Type::Pointer(Box::new(member_type))
+    };
     Ok((name, member_type))
 }
 

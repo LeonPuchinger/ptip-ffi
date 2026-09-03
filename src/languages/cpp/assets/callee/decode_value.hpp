@@ -1,0 +1,1 @@
+ptip_ffi::decode_value<{{TYPE}}>(ptip_ffi::decode_parameter_line(lines[{{INDEX}}]))
