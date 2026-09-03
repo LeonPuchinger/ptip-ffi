@@ -11,6 +11,8 @@
 
 namespace ptip_ffi_generated {
 
+{{FORWARD_DECLARATIONS}}
+
 {{STUBS}}
 
 }

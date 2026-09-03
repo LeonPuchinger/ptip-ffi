@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::{collections::BTreeMap, path::PathBuf};
 
 use crate::{
     codegen::{CodegenOutput, template::TemplateEngine},
@@ -22,6 +22,7 @@ const CALLER_ERROR_HANDLING_CONSTRUCTOR: &str = include_str!("./assets/caller/er
 pub fn generate_caller(modules: Vec<&Module>) -> Vec<CodegenOutput> {
     let engine = TemplateEngine::new("{{NAME}}").expect("failed to compile template placeholder");
     let generated = render_caller_stubs(&engine, &modules);
+    let forward_declarations = render_forward_declarations(&modules);
 
     vec![
         CodegenOutput {
@@ -42,12 +43,76 @@ pub fn generate_caller(modules: Vec<&Module>) -> Vec<CodegenOutput> {
                 CALLER_STUB,
                 &crate::map! {
                     "NAME" => "ptip_ffi_generated",
+                    "FORWARD_DECLARATIONS" => forward_declarations.as_str(),
                     "STUBS" => generated.as_str(),
                 },
                 false,
             ),
         },
     ]
+}
+
+fn render_forward_declarations(modules: &[&Module]) -> String {
+    let mut declarations = BTreeMap::new();
+    for module in modules {
+        for definition in &module.types {
+            if !definition.type_parameters.is_empty() {
+                declarations.insert(definition.name.clone(), definition.type_parameters.len());
+            }
+            for (_, property_type) in &definition.properties {
+                collect_generic_reference(property_type, &mut declarations);
+            }
+            for method in definition.methods.iter().chain(definition.static_methods.iter()) {
+                collect_generic_reference(&method.callable.return_type, &mut declarations);
+                for parameter in &method.callable.positional_parameters {
+                    collect_generic_reference(&parameter.r#type, &mut declarations);
+                }
+            }
+        }
+        for function in &module.functions {
+            collect_generic_reference(&function.callable.return_type, &mut declarations);
+            for parameter in &function.callable.positional_parameters {
+                collect_generic_reference(&parameter.r#type, &mut declarations);
+            }
+        }
+    }
+    declarations
+        .into_iter()
+        .filter(|(_, parameter_count)| *parameter_count > 0)
+        .map(|(name, parameter_count)| {
+            format!(
+                "template <{}> struct {};",
+                (0..parameter_count)
+                    .map(|index| format!("typename T{}", index))
+                    .collect::<Vec<_>>()
+                    .join(", "),
+                name
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn collect_generic_reference(r#type: &Type, declarations: &mut BTreeMap<String, usize>) {
+    match r#type {
+        Type::Composite(path) => {
+            if !path.type_arguments.is_empty() {
+                declarations
+                    .entry(path.name.clone())
+                    .or_insert(path.type_arguments.len());
+                for argument in &path.type_arguments {
+                    collect_generic_reference(argument, declarations);
+                }
+            }
+        }
+        Type::Pointer(inner) | Type::Array(inner) => collect_generic_reference(inner, declarations),
+        Type::Tuple(elements) => {
+            for element in elements {
+                collect_generic_reference(element, declarations);
+            }
+        }
+        Type::Primitive(_) | Type::Dynamic => {}
+    }
 }
 
 fn render_caller_stubs(engine: &TemplateEngine, modules: &[&Module]) -> String {
@@ -427,7 +492,13 @@ fn render_type_parameters(parameters: &[TypeParameter]) -> String {
         "template <{}>\n",
         parameters
             .iter()
-            .map(|parameter| format!("typename {}", parameter.name))
+            .map(|parameter| {
+                let default_type = match parameter.name.as_str() {
+                    "K" => "std::string",
+                    _ => "long long",
+                };
+                format!("typename {} = {}", parameter.name, default_type)
+            })
             .collect::<Vec<_>>()
             .join(", ")
     )
