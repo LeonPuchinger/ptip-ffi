@@ -1,0 +1,1 @@
+        return respond_with_value({{SINK}}, ptip_ffi::encode_value({{VALUE}}));

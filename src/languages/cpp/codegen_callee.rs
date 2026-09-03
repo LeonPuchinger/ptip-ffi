@@ -8,12 +8,23 @@ use crate::{
 const CALLEE_BRIDGE: &str = include_str!("./assets/bridge.hpp");
 const CALLEE_SOCKET: &str = include_str!("./assets/socket.hpp");
 const CALLEE_MAIN: &str = include_str!("./assets/callee_main.hpp");
-const CALLEE_MAIN_ENTRYPOINT: &str = "#include \"main.hpp\"\n\nint main() {\n    return ptip_ffi::run_library_server();\n}\n";
+const CALLEE_MAIN_ENTRYPOINT: &str = include_str!("./assets/callee_main.cpp");
 const CALLEE_DISPATCH: &str = include_str!("./assets/callee_dispatch.hpp");
+const CALLEE_DISPATCH_CASES: &str = include_str!("./assets/callee_dispatch_cases.hpp");
+const CALLEE_FUNCTION_CASE: &str = include_str!("./assets/callee/function_case.hpp");
+const CALLEE_FUNCTION_VOID_CASE: &str = include_str!("./assets/callee/function_void_case.hpp");
+const CALLEE_CONSTRUCTOR_CASE: &str = include_str!("./assets/callee/constructor_case.hpp");
+const CALLEE_METHOD_CASE: &str = include_str!("./assets/callee/method_case.hpp");
+const CALLEE_METHOD_VOID_BODY: &str = include_str!("./assets/callee/method_void_body.hpp");
+const CALLEE_METHOD_VALUE_BODY: &str = include_str!("./assets/callee/method_value_body.hpp");
+const CALLEE_RETURN_VALUE: &str = include_str!("./assets/callee/return_value.hpp");
+const CALLEE_RETURN_REFERENCE: &str = include_str!("./assets/callee/return_reference.hpp");
+const CALLEE_RETURN_UNDEFINED: &str = include_str!("./assets/callee/return_undefined.hpp");
+const CALLEE_DECODE_VALUE: &str = include_str!("./assets/callee/decode_value.hpp");
 
 pub fn generate_callee(modules: Vec<&Module>) -> Vec<CodegenOutput> {
     let engine = TemplateEngine::new("{{NAME}}").expect("failed to compile template placeholder");
-    let declarations = render_declarations(&modules);
+    let declarations = render_declarations(&engine, &modules);
     vec![
         CodegenOutput {
             path: PathBuf::from("bridge.hpp"),
@@ -44,18 +55,19 @@ pub fn generate_callee(modules: Vec<&Module>) -> Vec<CodegenOutput> {
     ]
 }
 
-fn render_declarations(modules: &[&Module]) -> String {
+fn render_declarations(engine: &TemplateEngine, modules: &[&Module]) -> String {
     let mut function_cases = Vec::new();
     let mut method_cases = Vec::new();
     for module in modules {
         for function in &module.functions {
-            function_cases.push(render_function_case(function));
+            function_cases.push(render_function_case(engine, function));
         }
         for definition in &module.types {
             if let Some(constructor) = &definition.default_constructor {
-                function_cases.push(render_constructor_case(definition, constructor));
+                function_cases.push(render_constructor_case(engine, definition, constructor));
             } else {
                 function_cases.push(render_constructor_case(
+                    engine,
                     definition,
                     &crate::features::AnonymousCallable {
                         positional_parameters: Vec::new(),
@@ -66,95 +78,133 @@ fn render_declarations(modules: &[&Module]) -> String {
                 ));
             }
             for method in &definition.methods {
-                method_cases.push(render_method_case(definition, method));
+                method_cases.push(render_method_case(engine, definition, method));
             }
         }
     }
-    format!(
-        "    if (kind == \"C\") {{\n        if (lines.size() < 3) return \"\";\n        const std::string target = decode_target_name(lines[1]);\n        const std::string return_sink = lines[2];\n{}\n        throw std::runtime_error(\"unknown function target: \" + target);\n    }}\n\n    if (kind == \"M\") {{\n        if (lines.size() < 4) return \"\";\n        const std::string called_reference = lines[1];\n        const std::string method_name = decode_target_name(lines[2]);\n        const std::string return_sink = lines[3];\n        auto& entry = instance_registry().at(called_reference);\n{}\n        throw std::runtime_error(\"unsupported method: \" + method_name);\n    }}",
-        function_cases.join("\n"),
-        method_cases.join("\n"),
+    let function_cases = function_cases.join("\n");
+    let method_cases = method_cases.join("\n");
+    engine.render(
+        CALLEE_DISPATCH_CASES,
+        &crate::map! {
+            "FUNCTION_CASES" => function_cases.as_str(),
+            "METHOD_CASES" => method_cases.as_str(),
+        },
+        true,
     )
 }
 
-fn render_function_case(function: &FunctionDefinition) -> String {
-    let arguments = render_arguments(&function.callable.positional_parameters, &function.callable.type_parameters, 3);
+fn render_function_case(engine: &TemplateEngine, function: &FunctionDefinition) -> String {
+    let arguments = render_arguments(engine, &function.callable.positional_parameters, &function.callable.type_parameters, 3);
     let invocation = format!("{}({})", function.name, arguments);
-    render_call_case(&function.name, &function.callable.return_type, &invocation, &function.callable.type_parameters)
+    render_call_case(engine, &function.name, &function.callable.return_type, &invocation, &function.callable.type_parameters)
 }
 
-fn render_constructor_case(definition: &TypeDefinition, constructor: &crate::features::AnonymousCallable) -> String {
+fn render_constructor_case(engine: &TemplateEngine, definition: &TypeDefinition, constructor: &crate::features::AnonymousCallable) -> String {
     let concrete_type = concrete_type_name(&definition.name, &definition.type_parameters);
-    let arguments = render_arguments(&constructor.positional_parameters, &definition.type_parameters, 3);
+    let arguments = render_arguments(engine, &constructor.positional_parameters, &definition.type_parameters, 3);
     let invocation = format!("{}({})", concrete_type, arguments);
-    format!(
-        "    if (target == \"{name}\") {{\n        const auto instance = {invocation};\n        instance_registry().emplace(return_sink, instance);\n        return respond_with_reference(return_sink, return_sink);\n    }}",
-        name = definition.name,
-        invocation = invocation,
+    engine.render(
+        CALLEE_CONSTRUCTOR_CASE,
+        &crate::map! {
+            "NAME" => definition.name.as_str(),
+            "INVOCATION" => invocation.as_str(),
+        },
+        true,
     )
 }
 
-fn render_method_case(definition: &TypeDefinition, method: &Method) -> String {
+fn render_method_case(engine: &TemplateEngine, definition: &TypeDefinition, method: &Method) -> String {
     let concrete_type = concrete_type_name(&definition.name, &definition.type_parameters);
-    let arguments = render_arguments(&method.callable.positional_parameters, &definition.type_parameters, 4);
+    let arguments = render_arguments(engine, &method.callable.positional_parameters, &definition.type_parameters, 4);
     let invocation = format!("instance->{}({})", method.name, arguments);
-    let result = render_return_expression(&method.callable.return_type, "result", "return_sink", &definition.type_parameters);
-    format!(
-        "    if (auto* instance = std::any_cast<{concrete_type}>(&entry)) {{\n        if (method_name == \"{method_name}\") {{\n{call}\n        }}\n    }}",
-        concrete_type = concrete_type,
-        method_name = method.name,
-        call = render_method_invocation(&method.callable.return_type, &invocation, &result),
+    let body = render_method_invocation(engine, &method.callable.return_type, &invocation, &definition.type_parameters);
+    engine.render(
+        CALLEE_METHOD_CASE,
+        &crate::map! {
+            "TYPE" => concrete_type.as_str(),
+            "NAME" => method.name.as_str(),
+            "BODY" => body.as_str(),
+        },
+        true,
     )
 }
 
-fn render_method_invocation(return_type: &Type, invocation: &str, result: &str) -> String {
+fn render_method_invocation(engine: &TemplateEngine, return_type: &Type, invocation: &str, type_parameters: &[TypeParameter]) -> String {
     if matches!(return_type, Type::Dynamic) {
-        return format!("            {invocation};\n            return respond_with_value(return_sink, ptip_ffi::encode_value(std::string(\"undefined\")));");
+        let return_body = render_return_expression(engine, return_type, "result", "return_sink", type_parameters);
+        return engine.render(
+            CALLEE_METHOD_VOID_BODY,
+            &crate::map! {
+                "INVOCATION" => invocation,
+                "RETURN" => return_body.as_str(),
+            },
+            true,
+        );
     }
-    format!("            const auto result = {invocation};\n{result}")
+    let return_body = render_return_expression(engine, return_type, "result", "return_sink", type_parameters);
+    engine.render(
+        CALLEE_METHOD_VALUE_BODY,
+        &crate::map! {
+            "INVOCATION" => invocation,
+            "RETURN" => return_body.as_str(),
+        },
+        true,
+    )
 }
 
-fn render_call_case(name: &str, return_type: &Type, invocation: &str, type_parameters: &[TypeParameter]) -> String {
-    let arguments = if matches!(return_type, Type::Dynamic) {
-        format!("        {invocation};\n        return respond_with_value(return_sink, ptip_ffi::encode_value(std::string(\"undefined\")));")
-    } else {
-        let result = render_return_expression(return_type, "result", "return_sink", type_parameters);
-        format!("        const auto result = {invocation};\n{result}")
-    };
-    let _ = type_parameters;
-    format!("    if (target == \"{name}\") {{\n{arguments}\n    }}")
+fn render_call_case(engine: &TemplateEngine, name: &str, return_type: &Type, invocation: &str, type_parameters: &[TypeParameter]) -> String {
+    if matches!(return_type, Type::Dynamic) {
+        let return_body = render_return_expression(engine, return_type, "result", "return_sink", type_parameters);
+        return engine.render(
+            CALLEE_FUNCTION_VOID_CASE,
+            &crate::map! {
+                "NAME" => name,
+                "INVOCATION" => invocation,
+                "RETURN" => return_body.as_str(),
+            },
+            true,
+        );
+    }
+    let result = render_return_expression(engine, return_type, "result", "return_sink", type_parameters);
+    engine.render(
+        CALLEE_FUNCTION_CASE,
+        &crate::map! {
+            "NAME" => name,
+            "INVOCATION" => invocation,
+            "RETURN" => result.as_str(),
+        },
+        true,
+    )
 }
 
-fn render_return_expression(return_type: &Type, result_name: &str, sink_name: &str, type_parameters: &[TypeParameter]) -> String {
+fn render_return_expression(engine: &TemplateEngine, return_type: &Type, result_name: &str, sink_name: &str, type_parameters: &[TypeParameter]) -> String {
     if let Type::Composite(path) = return_type
         && type_parameters.iter().any(|parameter| parameter.name == path.name)
     {
-        return format!("            return respond_with_value({sink_name}, ptip_ffi::encode_value({result_name}));");
+        return engine.render(CALLEE_RETURN_VALUE, &crate::map! { "SINK" => sink_name, "VALUE" => result_name }, false);
     }
     match return_type {
         Type::Primitive(PrimitiveType::Number)
         | Type::Primitive(PrimitiveType::String)
         | Type::Primitive(PrimitiveType::Boolean) => {
-            format!("            return respond_with_value({sink_name}, ptip_ffi::encode_value({result_name}));")
+            engine.render(CALLEE_RETURN_VALUE, &crate::map! { "SINK" => sink_name, "VALUE" => result_name }, false)
         }
-        Type::Dynamic => format!("            return respond_with_value({sink_name}, ptip_ffi::encode_value(std::string(\"undefined\")));"),
-        Type::Composite(_) | Type::Pointer(_) => format!(
-            "            instance_registry().emplace({sink_name}, {result_name});\n            return respond_with_reference({sink_name}, {sink_name});",
-            sink_name = sink_name,
-            result_name = result_name,
-        ),
-        Type::Array(_) | Type::Tuple(_) => "            return ptip_ffi::encode_value(std::string(\"unsupported\"));".to_string(),
+        Type::Dynamic => engine.render(CALLEE_RETURN_UNDEFINED, &crate::map! { "SINK" => sink_name }, false),
+        Type::Composite(_) | Type::Pointer(_) => engine.render(CALLEE_RETURN_REFERENCE, &crate::map! { "SINK" => sink_name, "VALUE" => result_name }, false),
+        Type::Array(_) | Type::Tuple(_) => engine.render(CALLEE_RETURN_VALUE, &crate::map! { "SINK" => sink_name, "VALUE" => "std::string(\"unsupported\")" }, false),
     }
 }
 
-fn render_arguments(parameters: &[crate::features::ValueParameter], type_parameters: &[TypeParameter], line_offset: usize) -> String {
+fn render_arguments(engine: &TemplateEngine, parameters: &[crate::features::ValueParameter], type_parameters: &[TypeParameter], line_offset: usize) -> String {
     parameters
         .iter()
         .enumerate()
         .map(|(index, parameter)| {
             let concrete = render_type(&parameter.r#type, type_parameters);
             if matches!(parameter.r#type, Type::Primitive(_)) || matches!(concrete.as_str(), "double" | "std::string" | "bool" | "int") {
-                format!("ptip_ffi::decode_value<{}>(ptip_ffi::decode_parameter_line(lines[{}]))", concrete, index + line_offset)
+                let index = (index + line_offset).to_string();
+                engine.render(CALLEE_DECODE_VALUE, &crate::map! { "TYPE" => concrete.as_str(), "INDEX" => index.as_str() }, false)
             } else if matches!(parameter.r#type, Type::Pointer(_)) {
                 format!("decode_reference_pointer<{}>(ptip_ffi::decode_parameter_line(lines[{}]).value)", concrete.trim_end_matches('*'), index + line_offset)
             } else {
