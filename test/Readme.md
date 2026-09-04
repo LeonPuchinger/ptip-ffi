@@ -45,13 +45,19 @@ Use `test/smoke/test.sh --help` to display the available options.
 
 The performance test measures HashMap operations through every caller/callee permutation and writes results using the same CSV schema as the native baselines.
 
-From the repository root:
+The performance test measures how long a set number of HashMap operations takes when performed over the FFI.
+As a comparison, the performance test also includes a way to measure the native performance.
+In the native performance test, the same HashMap-based scenario is invoked, but not over the FFI.
+Instead, each language only calls it own, native implementation.
+
+To invoke the FFI performance test, the following command can be invoked from the repository root:
 
 ```bash
-test/performance/test_ffi_performance
+test/performance/test_ffi_performance.sh
 ```
 
-By default, all nine caller/callee combinations run once with `100000` operations. Filter the matrix with the same language options as the smoke test and use `--repetitions` to repeat each selected case:
+By default, all nine caller/callee combinations run once with `100000` operations.
+The matrix can be filtered with the same language options as the smoke test and the `--repetitions` flag can be used to control how often each selected case is run:
 
 ```bash
 test/performance/test_ffi_performance \
@@ -60,13 +66,31 @@ test/performance/test_ffi_performance \
   --repetitions 5
 ```
 
-Set `FFI_PERFORMANCE_OPERATIONS` to change the operations per measurement without changing the matrix options:
+The `FFI_PERFORMANCE_OPERATIONS` environment variable can be used to change the HashMap operations per measurement without changing the matrix options:
 
 ```bash
 FFI_PERFORMANCE_OPERATIONS=1000000 test/performance/test_ffi_performance
 ```
 
-Each case starts from a clean generated directory under `test/performance/output/<caller>_<callee>`. Measurement files are written to `test/performance/results/ffi_<caller>_<callee>.csv` with columns `timestamp,operations,key_alphabet,max_insert_value,elapsed_ms`.
+Each case starts from a cleanly generated directory under `test/performance/output/<caller>_<callee>`.
+Measurement files are written to `test/performance/results/ffi_<caller>_<callee>.csv` with columns `timestamp,operations,key_alphabet,max_insert_value,elapsed_ms`.
+
+To run the native baseline performance tests, use:
+
+```bash
+test/performance/test_native_performance.sh
+```
+
+Without options, all three native implementations run once. Use `--languages` to select languages and `--repetitions` to repeat each selected native test:
+
+```bash
+test/performance/test_native_performance.sh \
+  --languages py,cpp \
+  --repetitions 5
+```
+
+The native runner uses the same `FFI_PERFORMANCE_OPERATIONS` environment variable as the FFI runner.
+Native measurements are appended to `test/performance/results/native_<language>.csv`.
 
 ## Unit Tests
 
