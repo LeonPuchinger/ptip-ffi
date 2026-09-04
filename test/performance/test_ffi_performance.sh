@@ -52,27 +52,13 @@ parse_languages() {
 run_once() {
     local output_dir="$1"
     local result_file="$2"
-    local initial_lines=0
     shift 2
     local process_id
     local exit_code
 
-    if [[ -f "$result_file" ]]; then
-        initial_lines=$(wc -l < "$result_file")
-    fi
-
     set +e
     setsid timeout --signal=TERM --kill-after=5s 300s "$@" &
     process_id=$!
-    while kill -0 "$process_id" 2>/dev/null; do
-        if [[ -f "$result_file" ]] && [[ "$(wc -l < "$result_file")" -gt "$initial_lines" ]]; then
-            kill -KILL -- "-$process_id" 2>/dev/null || true
-            wait "$process_id" 2>/dev/null || true
-            set -e
-            return 0
-        fi
-        sleep 0.05
-    done
     wait "$process_id"
     exit_code=$?
     kill -KILL -- "-$process_id" 2>/dev/null || true
