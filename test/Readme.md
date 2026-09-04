@@ -41,6 +41,33 @@ test/smoke/test.sh \
 
 Use `test/smoke/test.sh --help` to display the available options.
 
+## Performance Tests
+
+The performance test measures HashMap operations through every caller/callee permutation and writes results using the same CSV schema as the native baselines.
+
+From the repository root:
+
+```bash
+test/performance/test_ffi_performance
+```
+
+By default, all nine caller/callee combinations run once with `100000` operations. Filter the matrix with the same language options as the smoke test and use `--repetitions` to repeat each selected case:
+
+```bash
+test/performance/test_ffi_performance \
+  --caller-languages py,ts \
+  --callee-languages cpp \
+  --repetitions 5
+```
+
+Set `FFI_PERFORMANCE_OPERATIONS` to change the operations per measurement without changing the matrix options:
+
+```bash
+FFI_PERFORMANCE_OPERATIONS=1000000 test/performance/test_ffi_performance
+```
+
+Each case starts from a clean generated directory under `test/performance/output/<caller>_<callee>`. Measurement files are written to `test/performance/results/ffi_<caller>_<callee>.csv` with columns `timestamp,operations,key_alphabet,max_insert_value,elapsed_ms`.
+
 ## Unit Tests
 
 The functionality of `ptip-ffi` itself (e.g. its parser or code generator) is tested via unit tests implemented in Rust.

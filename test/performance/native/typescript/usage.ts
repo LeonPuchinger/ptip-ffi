@@ -38,7 +38,7 @@ for (let i = 0; i < OPERATIONS; i++) {
 
 const elapsed_ms = (performance.now() - start).toFixed(3);
 
-const timestamp = new Date().toISOString();
+const timestamp = localIsoTimestamp(new Date());
 const line = `${timestamp},${OPERATIONS},${KEY_ALPHABET},${MAX_INSERT_VALUE},${elapsed_ms}\n`;
 const resultsDir = fileURLToPath(
     new URL("../../results/", import.meta.url)
@@ -53,3 +53,13 @@ if (!fs.existsSync(resultsFile)) {
     fs.writeFileSync(resultsFile, "timestamp,operations,key_alphabet,max_insert_value,elapsed_ms\n");
 }
 fs.appendFileSync(resultsFile, line);
+
+function localIsoTimestamp(date: Date): string {
+    const pad = (value: number, width = 2) => String(value).padStart(width, "0");
+    const offsetMinutes = -date.getTimezoneOffset();
+    const sign = offsetMinutes >= 0 ? "+" : "-";
+    const absoluteOffset = Math.abs(offsetMinutes);
+    return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`
+        + `T${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}.${pad(date.getMilliseconds(), 3)}`
+        + `${sign}${pad(Math.floor(absoluteOffset / 60))}:${pad(absoluteOffset % 60)}`;
+}

@@ -67,11 +67,13 @@ int main(int argc, char **argv) {
     const auto fractional_milliseconds = milliseconds -
         std::chrono::duration_cast<std::chrono::milliseconds>(seconds).count();
     const std::time_t timestamp = std::chrono::system_clock::to_time_t(now);
-    std::tm utc_timestamp = *std::gmtime(&timestamp);
+    std::tm local_timestamp = *std::localtime(&timestamp);
+    char timezone_offset[16]{};
+    std::strftime(timezone_offset, sizeof(timezone_offset), "%z", &local_timestamp);
     std::ostringstream timestamp_stream;
-    timestamp_stream << std::put_time(&utc_timestamp, "%Y-%m-%dT%H:%M:%S")
+    timestamp_stream << std::put_time(&local_timestamp, "%Y-%m-%dT%H:%M:%S")
                      << '.' << std::setfill('0') << std::setw(3) << fractional_milliseconds
-                     << 'Z';
+                     << timezone_offset;
 
     const std::filesystem::path results_dir =
         std::filesystem::path(__FILE__).parent_path() / "../../results";
