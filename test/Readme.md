@@ -44,11 +44,7 @@ Use `test/smoke/test.sh --help` to display the available options.
 ## Performance Tests
 
 The performance test measures HashMap operations through every caller/callee permutation and writes results using the same CSV schema as the native baselines.
-
 The performance test measures how long a set number of HashMap operations takes when performed over the FFI.
-As a comparison, the performance test also includes a way to measure the native performance.
-In the native performance test, the same HashMap-based scenario is invoked, but not over the FFI.
-Instead, each language only calls it own, native implementation.
 
 To invoke the FFI performance test, the following command can be invoked from the repository root:
 
@@ -75,6 +71,9 @@ FFI_PERFORMANCE_OPERATIONS=1000000 test/performance/test_ffi_performance
 Each case starts from a cleanly generated directory under `test/performance/output/<caller>_<callee>`.
 Measurement files are written to `test/performance/results/ffi_<caller>_<callee>.csv` with columns `timestamp,operations,key_alphabet,max_insert_value,elapsed_ms`.
 
+As a comparison, the performance test includes a way to measure the native performance as well as the performance of an alternative FFI solution.
+In the native performance test, the same HashMap-based scenario is invoked, but not over the FFI.
+Instead, each language only calls it own, native implementation.
 To run the native baseline performance tests, use:
 
 ```bash
@@ -91,6 +90,34 @@ test/performance/test_native_performance.sh \
 
 The native runner uses the same `FFI_PERFORMANCE_OPERATIONS` environment variable as the FFI runner.
 Native measurements are appended to `test/performance/results/native_<language>.csv`.
+
+For the performance test of the alternate FFI solution, gRPC is used.
+To be able to run the gRPC performance test, gRPC needs to be setup on the test runner with support for python, cpp, and typescript installed.
+It it also invoked in a similar way to the FFI performance test, as shown in the following:
+
+Run the complete matrix:
+
+```bash
+test/performance/test_grpc_performance.sh
+```
+
+The runner accepts the same caller/callee filters and repetition option as the FFI runner:
+
+```bash
+test/performance/test_grpc_performance.sh \
+  --caller-languages py,cpp \
+  --callee-languages ts \
+  --repetitions 5
+```
+
+The workload is controlled with `FFI_PERFORMANCE_OPERATIONS`, for example:
+
+```bash
+FFI_PERFORMANCE_OPERATIONS=1000000 test/performance/test_grpc_performance.sh
+```
+
+Generated gRPC artifacts are placed under `test/performance/alternatives/grpc/output/<caller>_<callee>`.
+Results are appended to `test/performance/results/grpc_<caller>_<callee>.csv` using the common performance schema.
 
 ## Unit Tests
 
