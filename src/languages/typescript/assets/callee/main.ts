@@ -1,4 +1,4 @@
-import { Bridge } from "./bridge.ts";
+import { Bridge, Message } from "./bridge.ts";
 import { dispatchMessage } from "./dispatch.ts";
 import { MessageSocket, SynchronousSocketServer } from "./socket.ts";
 
@@ -20,7 +20,12 @@ while (true) {
     const datagramSocket = new MessageSocket(streamSocket);
     const bridge = new Bridge(datagramSocket);
     while (true) {
-        const message = bridge.nextMessage();
+        let message: Message | null;
+        try {
+            message = bridge.nextMessage();
+        } catch {
+            break;
+        }
         if (message === null) {
             break;
         }

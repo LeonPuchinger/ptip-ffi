@@ -1,0 +1,17 @@
+syntax = "proto3";
+
+package hashmap;
+
+message Empty {}
+message Handle { string id = 1; }
+message Key { string handle = 1; string key = 2; }
+message Entry { string handle = 1; string key = 2; int64 value = 3; }
+message Value { int64 value = 1; }
+message BoolValue { bool value = 1; }
+
+service HashMapService {
+  rpc Create(Empty) returns (Handle);
+  rpc Set(Entry) returns (Empty);
+  rpc Get(Key) returns (Value);
+  rpc Has(Key) returns (BoolValue);
+}

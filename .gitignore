@@ -17,3 +17,6 @@ out_*/
 in_*/
 
 test/smoke/output/**
+test/performance/output/**
+test/performance/results/**
+test/performance/alternatives/grpc/output/**
